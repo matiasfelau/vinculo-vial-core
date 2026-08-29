@@ -1,0 +1,38 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: vvi-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - vvi-network
+
+  core:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vvi-core-service
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      # The broker lives on the compose network under its service name;
+      # "localhost" would point at this container itself, not rabbitmq.
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      RABBITMQ_EXCHANGE: ${RABBITMQ_EXCHANGE:-vvi.topic.exchange}
+      RABBITMQ_EXCHANGE_TYPE: ${RABBITMQ_EXCHANGE_TYPE:-topic}
+      RABBITMQ_QUEUE: ${RABBITMQ_QUEUE:-core-service.alerts}
+      RABBITMQ_ALERTS_ROUTING_KEY: ${RABBITMQ_ALERTS_ROUTING_KEY:-alert.#}
+    networks:
+      - vvi-network
+
+networks:
+  vvi-network:
+    driver: bridge
