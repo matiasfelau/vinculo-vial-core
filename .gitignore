@@ -3,3 +3,6 @@
 *.test
 *.out
 .env
+
+CLAUDE.md
+.clauderules
