@@ -10,14 +10,14 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/core-service ./cmd/consumer
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/core ./cmd/core
 
 # ---- final ----
 FROM scratch
 
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=builder /out/core-service /core-service
+COPY --from=builder /out/core /core
 
 USER 65534:65534
 
-ENTRYPOINT ["/core-service"]
+ENTRYPOINT ["/core"]
