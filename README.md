@@ -1,0 +1,44 @@
+# vinculo-vial-core
+
+Job de inicialización de infraestructura del ecosistema Vínculo Vial: declara,
+de forma idempotente, la topología de RabbitMQ (exchanges, colas, bindings,
+reintento y dead-letter) y termina. No consume ni publica eventos de negocio.
+
+## Requisitos
+
+- Go 1.25+
+- Docker y Docker Compose
+
+## Comandos
+
+```
+go run ./cmd/core
+go test ./...
+CGO_ENABLED=0 go build -o core ./cmd/core
+docker compose up --build
+```
+
+`docker compose up` requiere que exista de antemano la red externa
+`vinculo-vial` (ver más abajo). Si no existe:
+
+```
+docker network create vinculo-vial
+```
+
+## Convención de nombres de infraestructura Docker
+
+Para evitar colisiones de resolución DNS entre repositorios, toda la
+infraestructura Docker de la plataforma sigue esta convención:
+
+| Elemento | Regla | Aplicación en este repo |
+|---|---|---|
+| Contenedor principal | `container_name: vinculo-vial-[nombre-del-servicio]` | `vinculo-vial-core` |
+| Contenedor secundario (DB o broker exclusivo) | `vinculo-vial-[nombre]-db` o `vinculo-vial-[tecnologia]` | `vinculo-vial-rabbitmq` |
+| Red global | `vinculo-vial`, `external: true` | `core` y `rabbitmq` se conectan a ella |
+| Red interna | `[nombre-del-servicio]-internal`, si se gestiona una base de datos privada | No aplica: RabbitMQ acá no es una base de datos privada de Core, es el broker compartido de todo el ecosistema, y debe permanecer alcanzable en la red global para que Alert y los demás servicios publiquen sobre la topología que Core declara |
+| Volúmenes persistentes | `vinculo-vial-[nombre]-data` | No aplica: el broker de este repo no lleva volúmenes persistentes, por diseño, para que cada ciclo `down`/`up` ejercite la declaración de topología desde un estado vacío |
+
+Cualquier servicio que necesite alcanzar RabbitMQ desde otro repositorio debe
+direccionarlo por su `container_name` (`vinculo-vial-rabbitmq`), no por el
+nombre de servicio de compose: ese alias es local a cada proyecto y puede
+colisionar con el de otro repositorio en la red compartida.
