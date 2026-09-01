@@ -42,3 +42,22 @@ Cualquier servicio que necesite alcanzar RabbitMQ desde otro repositorio debe
 direccionarlo por su `container_name` (`vinculo-vial-rabbitmq`), no por el
 nombre de servicio de compose: ese alias es local a cada proyecto y puede
 colisionar con el de otro repositorio en la red compartida.
+
+## Release
+
+El workflow `.github/workflows/publish.yml` construye la imagen y la publica
+en Docker Hub al asignarse un tag `v*` (por ejemplo `v0.1.0`) sobre `main`.
+Corre primero la suite de tests; si falla, no publica.
+
+Requiere dos secrets configurados en el repositorio de GitHub:
+
+| Secret | Contenido |
+|---|---|
+| `DOCKERHUB_USERNAME` | Usuario u organización de Docker Hub |
+| `DOCKERHUB_TOKEN` | Access token de Docker Hub con permiso de push |
+
+El versionado sigue SemVer. La imagen publicada queda etiquetada con el tag
+de git tal cual (`v0.1.0`) y además como `latest`.
+
+El workflow también admite disparo manual (`workflow_dispatch`) para validar
+el pipeline sin necesidad de cortar un tag real.
