@@ -1,0 +1,73 @@
+services:
+  # Contenedor secundario (broker exclusivo de este repo): vinculo-vial-[tecnologia].
+  #
+  # No se aísla en una red interna: a diferencia de una base de datos privada
+  # de un servicio, este RabbitMQ es el broker compartido de todo el
+  # ecosistema, y debe permanecer alcanzable en la red vinculo-vial para que
+  # Alert y los demás repositorios publiquen sobre la topología que Core
+  # declara. Aislarlo localmente reintroduciría el problema de alcance que
+  # motivó conectarlo a la red externa.
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: vinculo-vial-rabbitmq
+    # La imagen oficial declara un volumen anónimo para /var/lib/rabbitmq;
+    # en Docker Desktop, recrearlo en un ciclo down/up rápido a veces gana
+    # la carrera contra el chown del entrypoint y el arranque falla con
+    # EACCES en .erlang.cookie. on-failure lo recupera solo sin volver a
+    # este job de larga espera manual; acotado a 5 intentos para no
+    # enmascarar un fallo real de configuración con un loop indefinido.
+    restart: on-failure:5
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - vinculo-vial
+
+  # core es un job de inicialización, no un servicio de larga vida: declara
+  # la topología, la verifica y termina (exit 0 en éxito). Sin "restart:"
+  # explícito porque el default de compose ya es no reiniciar contenedores
+  # finalizados, que es exactamente el comportamiento de un job.
+  #
+  # Contenedor principal: vinculo-vial-[nombre-del-servicio].
+  core:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vinculo-vial-core
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      # Se direcciona por container_name (vinculo-vial-rabbitmq), no por el
+      # nombre de servicio de compose ("rabbitmq"): ese alias es genérico y
+      # puede colisionar con el de otro repositorio en la red compartida.
+      # "localhost" tampoco es válido: apuntaría a este mismo contenedor.
+      RABBITMQ_URL: amqp://guest:guest@vinculo-vial-rabbitmq:5672/
+      RABBITMQ_MAIN_EXCHANGE: ${RABBITMQ_MAIN_EXCHANGE:-vvi.topic.exchange}
+      RABBITMQ_RETRY_EXCHANGE: ${RABBITMQ_RETRY_EXCHANGE:-vvi.retry.exchange}
+      RABBITMQ_DLQ_EXCHANGE: ${RABBITMQ_DLQ_EXCHANGE:-vvi.dlq.exchange}
+      RABBITMQ_UNROUTED_EXCHANGE: ${RABBITMQ_UNROUTED_EXCHANGE:-vvi.unrouted.exchange}
+      RETRY_TTL_MS: ${RETRY_TTL_MS:-30000}
+    networks:
+      - vinculo-vial
+
+networks:
+  # Red compartida entre repositorios del ecosistema. No la crea este
+  # compose (external: true): debe existir de antemano en el host, por
+  # ejemplo con `docker network create vinculo-vial`, para que el broker
+  # efímero de este repo sea alcanzable por Alert y los demás servicios
+  # que corren en sus propios docker-compose.
+  vinculo-vial:
+    external: true
+
+# Sin bloque "volumes": el broker efímero de este repo no lleva volúmenes
+# persistentes por diseño, para que cada ciclo down/up ejercite la
+# declaración de topología contra un estado vacío. La convención
+# vinculo-vial-[nombre]-data no tiene ningún volumen al que aplicarse
+# todavía.
