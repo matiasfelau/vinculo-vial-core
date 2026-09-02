@@ -52,7 +52,7 @@ func run(logger *slog.Logger) error {
 	}
 	defer conn.Close()
 
-	t := topology.US05(cfg)
+	t := topology.Notification(cfg)
 	if err := t.Validate(); err != nil {
 		return fmt.Errorf("modelo de topología inconsistente: %w", err)
 	}
