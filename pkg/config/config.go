@@ -18,6 +18,10 @@ type Config struct {
 	DLQExchange      string
 	UnroutedExchange string
 	RetryTTLMs       int32
+	// Env identifica el entorno de ejecución (ENV). No participa en la
+	// declaración de topología; internal/reset lo usa como guarda para
+	// restringir la eliminación de topología a entornos locales.
+	Env string
 }
 
 // Load lee Config desde el entorno. RABBITMQ_URL es obligatoria; el resto
@@ -30,6 +34,7 @@ func Load() (Config, error) {
 		RetryExchange:    getEnvOrDefault("RABBITMQ_RETRY_EXCHANGE", "vvi.retry.exchange"),
 		DLQExchange:      getEnvOrDefault("RABBITMQ_DLQ_EXCHANGE", "vvi.dlq.exchange"),
 		UnroutedExchange: getEnvOrDefault("RABBITMQ_UNROUTED_EXCHANGE", "vvi.unrouted.exchange"),
+		Env:              os.Getenv("ENV"),
 	}
 
 	if cfg.RabbitMQURL == "" {
