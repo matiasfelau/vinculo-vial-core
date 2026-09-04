@@ -18,6 +18,21 @@ CGO_ENABLED=0 go build -o core ./cmd/core
 docker compose up --build
 ```
 
+### Reset de topología (solo desarrollo local)
+
+`cmd/reset` elimina la topología declarada por `cmd/core`, sin pasar por un
+ciclo completo de `docker compose down`/`up`. Requiere `ENV=local`; con
+cualquier otro valor, o sin definir la variable, termina con error antes de
+conectar al broker.
+
+```
+ENV=local go run ./cmd/reset
+```
+
+No forma parte del arranque del sistema ni del `docker-compose.yml`: es una
+herramienta manual, pensada para forzar una redeclaración de topología
+durante el desarrollo sin reiniciar el contenedor del broker.
+
 `docker compose up` requiere que exista de antemano la red externa
 `vinculo-vial` (ver más abajo). Si no existe:
 

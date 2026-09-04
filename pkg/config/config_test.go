@@ -17,12 +17,16 @@ func TestLoad_Defaults(t *testing.T) {
 	t.Setenv("RABBITMQ_DLQ_EXCHANGE", "")
 	t.Setenv("RABBITMQ_UNROUTED_EXCHANGE", "")
 	t.Setenv("RETRY_TTL_MS", "")
+	t.Setenv("ENV", "")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("error inesperado: %v", err)
 	}
 
+	if cfg.Env != "" {
+		t.Errorf("Env = %q, se esperaba vacío por defecto", cfg.Env)
+	}
 	if cfg.MainExchange != "vvi.topic.exchange" {
 		t.Errorf("MainExchange = %q, se esperaba vvi.topic.exchange", cfg.MainExchange)
 	}
@@ -55,5 +59,18 @@ func TestLoad_RetryTTLMustBePositive(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("se esperaba error por RETRY_TTL_MS no positivo")
+	}
+}
+
+func TestLoad_PropagaEnv(t *testing.T) {
+	t.Setenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq:5672/")
+	t.Setenv("ENV", "local")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	if cfg.Env != "local" {
+		t.Errorf("Env = %q, se esperaba local", cfg.Env)
 	}
 }
