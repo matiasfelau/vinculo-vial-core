@@ -33,6 +33,24 @@ No forma parte del arranque del sistema ni del `docker-compose.yml`: es una
 herramienta manual, pensada para forzar una redeclaración de topología
 durante el desarrollo sin reiniciar el contenedor del broker.
 
+### Smoke test de enrutamiento (requiere broker real)
+
+`internal/smoke` valida, contra un broker real, que un mensaje publicado en
+`vvi.topic.exchange` con una routing key del contrato llega efectivamente a
+la cola de trabajo que la topología le asocia a Notification: ejercita el
+binding real, no un canal simulado como el resto de la suite. Queda aislado
+con el build tag `smoke` para no formar parte de `go test ./...` ni requerir
+un broker disponible en la validación habitual.
+
+```
+RABBITMQ_URL=amqp://guest:guest@localhost:5672/ go test -tags smoke ./internal/smoke/...
+```
+
+La prueba declara la topología vigente de forma idempotente antes de
+publicar, por lo que no depende de que `cmd/core` haya corrido antes. No
+ejecutarla con el consumidor real de Notification activo contra el mismo
+broker: competiría por el mismo mensaje de la cola de trabajo.
+
 `docker compose up` requiere que exista de antemano la red externa
 `vinculo-vial` (ver más abajo). Si no existe:
 
