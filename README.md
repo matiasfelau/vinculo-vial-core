@@ -33,6 +33,16 @@ No forma parte del arranque del sistema ni del `docker-compose.yml`: es una
 herramienta manual, pensada para forzar una redeclaración de topología
 durante el desarrollo sin reiniciar el contenedor del broker.
 
+### Limpieza de exchange huérfano (legacy)
+
+En versiones anteriores, Identity publicaba eventos en un exchange llamado
+`vinculo-vial.events`, el cual ahora ha quedado huérfano tras la migración
+al exchange unificado `vvi.topic.exchange`. Como este job de inicialización
+no elimina recursos que no le pertenecen, la eliminación de `vinculo-vial.events`
+en los brokers preexistentes debe realizarse por única vez de forma manual:
+puede borrarse desde la UI de RabbitMQ Management o mediante la CLI de
+administración del broker (`rabbitmqadmin delete exchange name=vinculo-vial.events`).
+
 ### Smoke test de enrutamiento (requiere broker real)
 
 `internal/smoke` valida, contra un broker real, que un mensaje publicado en
