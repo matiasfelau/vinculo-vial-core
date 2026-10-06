@@ -57,9 +57,11 @@ RABBITMQ_URL=amqp://guest:guest@localhost:5672/ go test -tags smoke ./internal/s
 ```
 
 La prueba declara la topología vigente de forma idempotente antes de
-publicar, por lo que no depende de que `cmd/core` haya corrido antes. No
-ejecutarla con el consumidor real de Notification activo contra el mismo
-broker: competiría por el mismo mensaje de la cola de trabajo.
+publicar, por lo que no depende de que `cmd/core` haya corrido antes. Antes
+de publicar verifica que las colas de trabajo no tengan consumidores activos
+y falla si los hay: el consumidor real de Notification debe estar detenido
+(`docker stop vinculo-vial-notification`), porque competiría por el mismo
+mensaje.
 
 `docker compose up` requiere que exista de antemano la red externa
 `vinculo-vial` (ver más abajo). Si no existe:
