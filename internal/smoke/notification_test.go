@@ -34,7 +34,7 @@ const (
 // mensaje de user.sessions.revoked en el exchange principal y confirma que
 // llega a la cola de trabajo que esa topología le asocia a Notification:
 // ejercita el binding real, no una simulación.
-func TestSessionsRevoked_LlegaALaColaDeNotification(t *testing.T) {
+func TestRouting_LlegaALaCola(t *testing.T) {
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("cargando configuración: %v", err)
@@ -65,55 +65,68 @@ func TestSessionsRevoked_LlegaALaColaDeNotification(t *testing.T) {
 		t.Fatalf("declarando topología: %v", err)
 	}
 
-	queue, ok := workQueueFor(topo, cfg.MainExchange, topology.SessionsRevokedRoutingKey)
-	if !ok {
-		t.Fatalf("la topología no liga ninguna cola a %q en %q", topology.SessionsRevokedRoutingKey, cfg.MainExchange)
+	routingKeys := []string{
+		topology.SessionsRevokedRoutingKey,
+		topology.AlertCreatedRoutingKey,
 	}
 
-	consumeCh, err := conn.Channel()
-	if err != nil {
-		t.Fatalf("abriendo canal de consumo: %v", err)
-	}
-	defer consumeCh.Close()
+	for _, routingKey := range routingKeys {
+		t.Run(routingKey, func(t *testing.T) {
+			queue, ok := workQueueFor(topo, cfg.MainExchange, routingKey)
+			if !ok {
+				t.Fatalf("la topología no liga ninguna cola a %q en %q", routingKey, cfg.MainExchange)
+			}
 
-	deliveries, err := consumeCh.Consume(queue, "", false, false, false, false, nil)
-	if err != nil {
-		t.Fatalf("suscribiendo a %q: %v", queue, err)
-	}
+			consumeCh, err := conn.Channel()
+			if err != nil {
+				t.Fatalf("abriendo canal de consumo: %v", err)
+			}
+			defer consumeCh.Close()
 
-	publishCh, err := conn.Channel()
-	if err != nil {
-		t.Fatalf("abriendo canal de publicación: %v", err)
-	}
-	defer publishCh.Close()
+			deliveries, err := consumeCh.Consume(queue, "", false, false, false, false, nil)
+			if err != nil {
+				t.Fatalf("suscribiendo a %q: %v", queue, err)
+			}
 
-	marker := fmt.Sprintf("smoke-%d", time.Now().UnixNano())
-	publishCtx, publishCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer publishCancel()
+			publishCh, err := conn.Channel()
+			if err != nil {
+				t.Fatalf("abriendo canal de publicación: %v", err)
+			}
+			defer publishCh.Close()
 
-	err = publishCh.PublishWithContext(publishCtx, cfg.MainExchange, topology.SessionsRevokedRoutingKey, true, false, amqplib.Publishing{
-		ContentType:  "text/plain",
-		DeliveryMode: amqplib.Persistent,
-		Body:         []byte(marker),
-	})
-	if err != nil {
-		t.Fatalf("publicando en %q: %v", cfg.MainExchange, err)
-	}
+			returns := publishCh.NotifyReturn(make(chan amqplib.Return, 1))
 
-	select {
-	case d, open := <-deliveries:
-		if !open {
-			t.Fatal("el canal de consumo se cerró antes de recibir el mensaje")
-		}
-		if string(d.Body) != marker {
-			d.Nack(false, true)
-			t.Fatalf("llegó un mensaje de otra corrida (%q), se esperaba %q", d.Body, marker)
-		}
-		if err := d.Ack(false); err != nil {
-			t.Fatalf("confirmando el mensaje: %v", err)
-		}
-	case <-time.After(deliveryTimeout):
-		t.Fatalf("no llegó ningún mensaje a %q dentro de %s", queue, deliveryTimeout)
+			marker := fmt.Sprintf("smoke-%d-%s", time.Now().UnixNano(), routingKey)
+			publishCtx, publishCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer publishCancel()
+
+			err = publishCh.PublishWithContext(publishCtx, cfg.MainExchange, routingKey, true, false, amqplib.Publishing{
+				ContentType:  "text/plain",
+				DeliveryMode: amqplib.Persistent,
+				Body:         []byte(marker),
+			})
+			if err != nil {
+				t.Fatalf("publicando en %q: %v", cfg.MainExchange, err)
+			}
+
+			select {
+			case ret := <-returns:
+				t.Fatalf("se recibió basic.return inesperado para %q: %d %s", routingKey, ret.ReplyCode, ret.ReplyText)
+			case d, open := <-deliveries:
+				if !open {
+					t.Fatal("el canal de consumo se cerró antes de recibir el mensaje")
+				}
+				if string(d.Body) != marker {
+					d.Nack(false, true)
+					t.Fatalf("llegó un mensaje de otra corrida (%q), se esperaba %q", d.Body, marker)
+				}
+				if err := d.Ack(false); err != nil {
+					t.Fatalf("confirmando el mensaje: %v", err)
+				}
+			case <-time.After(deliveryTimeout):
+				t.Fatalf("no llegó ningún mensaje a %q dentro de %s", queue, deliveryTimeout)
+			}
+		})
 	}
 }
 
