@@ -5,7 +5,8 @@
 // efectivamente los eventos de dominio hacia la cola de Notification, algo
 // que las pruebas unitarias con canal simulado no pueden demostrar. Quedan
 // excluidas de "go test ./..." por el build tag "smoke": requieren
-// RABBITMQ_URL apuntando a un broker disponible.
+// RABBITMQ_URL apuntando a un broker disponible y el consumidor real de
+// Notification detenido.
 package smoke
 
 import (
@@ -29,12 +30,18 @@ const (
 	deliveryTimeout     = 5 * time.Second
 )
 
-// TestSessionsRevoked_LlegaALaColaDeNotification declara la topología
-// vigente contra el broker (idempotente, igual que cmd/core), publica un
-// mensaje de user.sessions.revoked en el exchange principal y confirma que
-// llega a la cola de trabajo que esa topología le asocia a Notification:
-// ejercita el binding real, no una simulación.
-func TestSessionsRevoked_LlegaALaColaDeNotification(t *testing.T) {
+type destino struct {
+	routingKey string
+	queue      string
+}
+
+// TestRouting_LlegaALaCola declara la topología vigente contra el broker
+// (idempotente, igual que cmd/core), verifica que no haya consumidores
+// activos en las colas de trabajo y, para cada routing key del contrato,
+// publica un mensaje en el exchange principal y confirma que llega a la cola
+// de trabajo que la topología le asocia: ejercita el binding real, no una
+// simulación.
+func TestRouting_LlegaALaCola(t *testing.T) {
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("cargando configuración: %v", err)
@@ -65,55 +72,81 @@ func TestSessionsRevoked_LlegaALaColaDeNotification(t *testing.T) {
 		t.Fatalf("declarando topología: %v", err)
 	}
 
-	queue, ok := workQueueFor(topo, cfg.MainExchange, topology.SessionsRevokedRoutingKey)
-	if !ok {
-		t.Fatalf("la topología no liga ninguna cola a %q en %q", topology.SessionsRevokedRoutingKey, cfg.MainExchange)
+	routingKeys := []string{
+		topology.SessionsRevokedRoutingKey,
+		topology.AlertCreatedRoutingKey,
 	}
 
-	consumeCh, err := conn.Channel()
-	if err != nil {
-		t.Fatalf("abriendo canal de consumo: %v", err)
-	}
-	defer consumeCh.Close()
-
-	deliveries, err := consumeCh.Consume(queue, "", false, false, false, false, nil)
-	if err != nil {
-		t.Fatalf("suscribiendo a %q: %v", queue, err)
-	}
-
-	publishCh, err := conn.Channel()
-	if err != nil {
-		t.Fatalf("abriendo canal de publicación: %v", err)
-	}
-	defer publishCh.Close()
-
-	marker := fmt.Sprintf("smoke-%d", time.Now().UnixNano())
-	publishCtx, publishCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer publishCancel()
-
-	err = publishCh.PublishWithContext(publishCtx, cfg.MainExchange, topology.SessionsRevokedRoutingKey, true, false, amqplib.Publishing{
-		ContentType:  "text/plain",
-		DeliveryMode: amqplib.Persistent,
-		Body:         []byte(marker),
-	})
-	if err != nil {
-		t.Fatalf("publicando en %q: %v", cfg.MainExchange, err)
-	}
-
-	select {
-	case d, open := <-deliveries:
-		if !open {
-			t.Fatal("el canal de consumo se cerró antes de recibir el mensaje")
+	var destinos []destino
+	for _, routingKey := range routingKeys {
+		queue, ok := workQueueFor(topo, cfg.MainExchange, routingKey)
+		if !ok {
+			t.Fatalf("la topología no liga ninguna cola a %q en %q", routingKey, cfg.MainExchange)
 		}
-		if string(d.Body) != marker {
-			d.Nack(false, true)
-			t.Fatalf("llegó un mensaje de otra corrida (%q), se esperaba %q", d.Body, marker)
+
+		q, err := declareCh.QueueDeclarePassive(queue, true, false, false, false, nil)
+		if err != nil {
+			t.Fatalf("verificando la cola %q: %v", queue, err)
 		}
-		if err := d.Ack(false); err != nil {
-			t.Fatalf("confirmando el mensaje: %v", err)
+		if q.Consumers > 0 {
+			t.Fatalf("la cola %q tiene %d consumidor(es) activo(s): detener vinculo-vial-notification antes de correr la prueba de humo", queue, q.Consumers)
 		}
-	case <-time.After(deliveryTimeout):
-		t.Fatalf("no llegó ningún mensaje a %q dentro de %s", queue, deliveryTimeout)
+
+		destinos = append(destinos, destino{routingKey: routingKey, queue: queue})
+	}
+
+	for _, d := range destinos {
+		t.Run(d.routingKey, func(t *testing.T) {
+			consumeCh, err := conn.Channel()
+			if err != nil {
+				t.Fatalf("abriendo canal de consumo: %v", err)
+			}
+			defer consumeCh.Close()
+
+			deliveries, err := consumeCh.Consume(d.queue, "", false, false, false, false, nil)
+			if err != nil {
+				t.Fatalf("suscribiendo a %q: %v", d.queue, err)
+			}
+
+			publishCh, err := conn.Channel()
+			if err != nil {
+				t.Fatalf("abriendo canal de publicación: %v", err)
+			}
+			defer publishCh.Close()
+
+			returns := publishCh.NotifyReturn(make(chan amqplib.Return, 1))
+
+			marker := fmt.Sprintf("smoke-%d-%s", time.Now().UnixNano(), d.routingKey)
+			publishCtx, publishCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer publishCancel()
+
+			err = publishCh.PublishWithContext(publishCtx, cfg.MainExchange, d.routingKey, true, false, amqplib.Publishing{
+				ContentType:  "text/plain",
+				DeliveryMode: amqplib.Persistent,
+				Body:         []byte(marker),
+			})
+			if err != nil {
+				t.Fatalf("publicando en %q: %v", cfg.MainExchange, err)
+			}
+
+			select {
+			case ret := <-returns:
+				t.Fatalf("se recibió basic.return inesperado para %q: %d %s", d.routingKey, ret.ReplyCode, ret.ReplyText)
+			case msg, open := <-deliveries:
+				if !open {
+					t.Fatal("el canal de consumo se cerró antes de recibir el mensaje")
+				}
+				if string(msg.Body) != marker {
+					msg.Nack(false, true)
+					t.Fatalf("llegó un mensaje de otra corrida (%q), se esperaba %q", msg.Body, marker)
+				}
+				if err := msg.Ack(false); err != nil {
+					t.Fatalf("confirmando el mensaje: %v", err)
+				}
+			case <-time.After(deliveryTimeout):
+				t.Fatalf("no llegó ningún mensaje a %q dentro de %s", d.queue, deliveryTimeout)
+			}
+		})
 	}
 }
 
