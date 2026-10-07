@@ -1,0 +1,34 @@
+package topology
+
+// Routing keys de los eventos que ligan cada cola de trabajo al exchange
+// principal, según la tabla "Topología a declarar" del contrato.
+const (
+	// AlertCreatedRoutingKey es la routing key del evento publicado por
+	// vinculo-vial-alert al validarse una alerta (GREEN/YELLOW).
+	AlertCreatedRoutingKey = "alert.created"
+
+	// SessionsRevokedRoutingKey es la routing key del evento publicado por
+	// vinculo-vial-identity al revocarse las sesiones de un usuario.
+	SessionsRevokedRoutingKey = "user.sessions.revoked"
+
+	// AlertEvidenceUploadedRoutingKey es la routing key del evento publicado
+	// por vinculo-vial-alert al subir la evidencia de una alerta.
+	AlertEvidenceUploadedRoutingKey = "alert.evidence.uploaded"
+
+	// IAEvidenceValidatedBindingKey es el patrón de binding de la cola de
+	// Alert que consume el veredicto de IA: IA publica con la routing key
+	// ia.evidence.validated.{green|yellow|red} y el patrón matchea las tres.
+	IAEvidenceValidatedBindingKey = "ia.evidence.validated.*"
+
+	// AlertRejectedRoutingKey es la routing key del evento publicado por
+	// vinculo-vial-alert al rechazarse una alerta (veredicto RED).
+	AlertRejectedRoutingKey = "alert.rejected"
+
+	// AlertReportedRoutingKey es la routing key del evento publicado por
+	// vinculo-vial-alert cuando el dueño reporta al emisor de una alerta.
+	AlertReportedRoutingKey = "alert.reported"
+
+	// UserStatusChangedRoutingKey es la routing key del evento publicado por
+	// vinculo-vial-identity al cambiar el estado de la cuenta de un usuario.
+	UserStatusChangedRoutingKey = "user.status.changed"
+)
