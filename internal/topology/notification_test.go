@@ -39,46 +39,89 @@ func TestNotification_ExchangePrincipalTieneAlternateExchange(t *testing.T) {
 	t.Fatal("vvi.topic.exchange no fue declarado")
 }
 
-func TestNotification_AlertCreatedRetryTieneTTLYDeadLetterAlExchangePrincipal(t *testing.T) {
+func TestNotification_RetryTieneTTLYVuelveSoloASuColaDeTrabajo(t *testing.T) {
 	tp := Notification(testConfig())
 
+	flows := map[string]string{
+		"notification.alert-created.retry":    "notification.alert-created.q",
+		"notification.sessions-revoked.retry": "notification.sessions-revoked.q",
+	}
+
+	found := map[string]bool{}
 	for _, q := range tp.Queues {
-		if q.Name != "notification.alert-created.retry" {
+		work, ok := flows[q.Name]
+		if !ok {
 			continue
 		}
+		found[q.Name] = true
 		if q.Arguments["x-message-ttl"] != int32(30000) {
-			t.Errorf("x-message-ttl = %v, se esperaba 30000", q.Arguments["x-message-ttl"])
+			t.Errorf("%s: x-message-ttl = %v, se esperaba 30000", q.Name, q.Arguments["x-message-ttl"])
 		}
-		if q.Arguments["x-dead-letter-exchange"] != "vvi.topic.exchange" {
-			t.Errorf("x-dead-letter-exchange = %v, se esperaba vvi.topic.exchange", q.Arguments["x-dead-letter-exchange"])
+		if q.Arguments["x-dead-letter-exchange"] != "" {
+			t.Errorf("%s: x-dead-letter-exchange = %v, se esperaba el exchange default", q.Name, q.Arguments["x-dead-letter-exchange"])
 		}
-		if q.Arguments["x-dead-letter-routing-key"] != AlertCreatedRoutingKey {
-			t.Errorf("x-dead-letter-routing-key = %v, se esperaba %q", q.Arguments["x-dead-letter-routing-key"], AlertCreatedRoutingKey)
+		if q.Arguments["x-dead-letter-routing-key"] != work {
+			t.Errorf("%s: x-dead-letter-routing-key = %v, se esperaba %q", q.Name, q.Arguments["x-dead-letter-routing-key"], work)
 		}
-		return
 	}
-	t.Fatal("notification.alert-created.retry no fue declarada")
+
+	for name := range flows {
+		if !found[name] {
+			t.Errorf("%s no fue declarada", name)
+		}
+	}
 }
 
-func TestNotification_SessionsRevokedRetryTieneTTLYDeadLetterAlExchangePrincipal(t *testing.T) {
+func TestNotification_ColasDeTrabajoHacenDeadLetterAlRetryPorSuNombre(t *testing.T) {
 	tp := Notification(testConfig())
 
-	for _, q := range tp.Queues {
-		if q.Name != "notification.sessions-revoked.retry" {
+	for _, name := range []string{"notification.alert-created.q", "notification.sessions-revoked.q"} {
+		found := false
+		for _, q := range tp.Queues {
+			if q.Name != name {
+				continue
+			}
+			found = true
+			if q.Arguments["x-dead-letter-exchange"] != "vvi.retry.exchange" {
+				t.Errorf("%s: x-dead-letter-exchange = %v, se esperaba vvi.retry.exchange", name, q.Arguments["x-dead-letter-exchange"])
+			}
+			if q.Arguments["x-dead-letter-routing-key"] != name {
+				t.Errorf("%s: x-dead-letter-routing-key = %v, se esperaba %q", name, q.Arguments["x-dead-letter-routing-key"], name)
+			}
+		}
+		if !found {
+			t.Errorf("%s no fue declarada", name)
+		}
+	}
+}
+
+func TestNotification_RetryYDLQEstanBindeadasPorNombreDeColaDeTrabajo(t *testing.T) {
+	tp := Notification(testConfig())
+
+	want := map[string]Binding{
+		"notification.alert-created.retry":    {Exchange: "vvi.retry.exchange", RoutingKey: "notification.alert-created.q"},
+		"notification.alert-created.dlq":      {Exchange: "vvi.dlq.exchange", RoutingKey: "notification.alert-created.q"},
+		"notification.sessions-revoked.retry": {Exchange: "vvi.retry.exchange", RoutingKey: "notification.sessions-revoked.q"},
+		"notification.sessions-revoked.dlq":   {Exchange: "vvi.dlq.exchange", RoutingKey: "notification.sessions-revoked.q"},
+	}
+
+	found := map[string]bool{}
+	for _, b := range tp.Bindings {
+		w, ok := want[b.Queue]
+		if !ok {
 			continue
 		}
-		if q.Arguments["x-message-ttl"] != int32(30000) {
-			t.Errorf("x-message-ttl = %v, se esperaba 30000", q.Arguments["x-message-ttl"])
+		found[b.Queue] = true
+		if b.Exchange != w.Exchange || b.RoutingKey != w.RoutingKey {
+			t.Errorf("binding de %q = (%q, %q), se esperaba (%q, %q)", b.Queue, b.Exchange, b.RoutingKey, w.Exchange, w.RoutingKey)
 		}
-		if q.Arguments["x-dead-letter-exchange"] != "vvi.topic.exchange" {
-			t.Errorf("x-dead-letter-exchange = %v, se esperaba vvi.topic.exchange", q.Arguments["x-dead-letter-exchange"])
-		}
-		if q.Arguments["x-dead-letter-routing-key"] != SessionsRevokedRoutingKey {
-			t.Errorf("x-dead-letter-routing-key = %v, se esperaba %q", q.Arguments["x-dead-letter-routing-key"], SessionsRevokedRoutingKey)
-		}
-		return
 	}
-	t.Fatal("notification.sessions-revoked.retry no fue declarada")
+
+	for queue := range want {
+		if !found[queue] {
+			t.Errorf("no se encontró binding para %q", queue)
+		}
+	}
 }
 
 func TestNotification_ColasDeTrabajoEnrutanAlExchangePrincipal(t *testing.T) {
