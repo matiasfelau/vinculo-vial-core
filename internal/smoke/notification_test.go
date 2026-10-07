@@ -60,7 +60,7 @@ func TestRouting_LlegaALaCola(t *testing.T) {
 	}
 	defer conn.Close()
 
-	topo := topology.Notification(cfg)
+	topo := topology.Platform(cfg)
 
 	declareCh, err := conn.Channel()
 	if err != nil {

@@ -52,8 +52,8 @@ func run(logger *slog.Logger) error {
 	}
 	defer conn.Close()
 
-	t := topology.Notification(cfg)
-	if err := t.Validate(); err != nil {
+	t := topology.Platform(cfg)
+	if err := t.Validate(cfg); err != nil {
 		return fmt.Errorf("modelo de topología inconsistente: %w", err)
 	}
 

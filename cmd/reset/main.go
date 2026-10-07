@@ -63,7 +63,7 @@ func run(logger *slog.Logger) error {
 	defer ch.Close()
 
 	resetter := reset.New(ch, logger)
-	if err := resetter.Apply(topology.Notification(cfg)); err != nil {
+	if err := resetter.Apply(topology.Platform(cfg)); err != nil {
 		return fmt.Errorf("eliminando topología: %w", err)
 	}
 

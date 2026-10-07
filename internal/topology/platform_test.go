@@ -17,15 +17,15 @@ func testConfig() config.Config {
 	}
 }
 
-func TestNotification_TopologiaCoherente(t *testing.T) {
-	tp := Notification(testConfig())
-	if err := tp.Validate(); err != nil {
-		t.Fatalf("la topología de notification no es coherente: %v", err)
+func TestPlatform_TopologiaCoherente(t *testing.T) {
+	tp := Platform(testConfig())
+	if err := tp.Validate(testConfig()); err != nil {
+		t.Fatalf("la topología de la plataforma no es coherente: %v", err)
 	}
 }
 
-func TestNotification_ExchangePrincipalTieneAlternateExchange(t *testing.T) {
-	tp := Notification(testConfig())
+func TestPlatform_ExchangePrincipalTieneAlternateExchange(t *testing.T) {
+	tp := Platform(testConfig())
 
 	for _, e := range tp.Exchanges {
 		if e.Name != "vvi.topic.exchange" {
@@ -39,8 +39,8 @@ func TestNotification_ExchangePrincipalTieneAlternateExchange(t *testing.T) {
 	t.Fatal("vvi.topic.exchange no fue declarado")
 }
 
-func TestNotification_RetryTieneTTLYVuelveSoloASuColaDeTrabajo(t *testing.T) {
-	tp := Notification(testConfig())
+func TestPlatform_RetryTieneTTLYVuelveSoloASuColaDeTrabajo(t *testing.T) {
+	tp := Platform(testConfig())
 
 	flows := map[string]string{
 		"notification.alert-created.retry":    "notification.alert-created.q",
@@ -72,8 +72,8 @@ func TestNotification_RetryTieneTTLYVuelveSoloASuColaDeTrabajo(t *testing.T) {
 	}
 }
 
-func TestNotification_ColasDeTrabajoHacenDeadLetterAlRetryPorSuNombre(t *testing.T) {
-	tp := Notification(testConfig())
+func TestPlatform_ColasDeTrabajoHacenDeadLetterAlRetryPorSuNombre(t *testing.T) {
+	tp := Platform(testConfig())
 
 	for _, name := range []string{"notification.alert-created.q", "notification.sessions-revoked.q"} {
 		found := false
@@ -95,8 +95,8 @@ func TestNotification_ColasDeTrabajoHacenDeadLetterAlRetryPorSuNombre(t *testing
 	}
 }
 
-func TestNotification_RetryYDLQEstanBindeadasPorNombreDeColaDeTrabajo(t *testing.T) {
-	tp := Notification(testConfig())
+func TestPlatform_RetryYDLQEstanBindeadasPorNombreDeColaDeTrabajo(t *testing.T) {
+	tp := Platform(testConfig())
 
 	want := map[string]Binding{
 		"notification.alert-created.retry":    {Exchange: "vvi.retry.exchange", RoutingKey: "notification.alert-created.q"},
@@ -124,8 +124,8 @@ func TestNotification_RetryYDLQEstanBindeadasPorNombreDeColaDeTrabajo(t *testing
 	}
 }
 
-func TestNotification_ColasDeTrabajoEnrutanAlExchangePrincipal(t *testing.T) {
-	tp := Notification(testConfig())
+func TestPlatform_ColasDeTrabajoEnrutanAlExchangePrincipal(t *testing.T) {
+	tp := Platform(testConfig())
 
 	want := map[string]string{
 		"notification.alert-created.q":    AlertCreatedRoutingKey,
@@ -154,8 +154,8 @@ func TestNotification_ColasDeTrabajoEnrutanAlExchangePrincipal(t *testing.T) {
 	}
 }
 
-func TestNotification_ColaSinRutaEstaLigadaAlAlternateExchange(t *testing.T) {
-	tp := Notification(testConfig())
+func TestPlatform_ColaSinRutaEstaLigadaAlAlternateExchange(t *testing.T) {
+	tp := Platform(testConfig())
 
 	for _, b := range tp.Bindings {
 		if b.Queue != "vvi.unrouted.q" {
