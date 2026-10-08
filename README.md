@@ -51,6 +51,17 @@ permite deshabilitar el versionado una vez activado (solo suspenderlo), así
 que revertirlo es una decisión manual. La retención de la evidencia redactada
 (`EVIDENCE_RETENTION_DAYS`) no es de Core: la aplica el sweeper de Alert.
 
+### Excepción a la directiva de circuit breaker
+
+La sección 12.1 de las reglas de la plataforma exige un circuit breaker por
+cada dependencia sincrónica. Core no lo implementa para S3, a propósito: esa
+directiva apunta a servicios de larga vida que atienden requests, donde un
+breaker evita que una dependencia degradada arrastre al resto. Core es un job
+de inicialización: espera de forma acotada (30 s, con backoff exponencial y
+jitter, sin reintentos del SDK y con un timeout por operación) y sale con
+código distinto de 0 si S3 no responde. No hay requests que proteger ni un
+estado que mantener entre llamadas.
+
 ### Configuración
 
 | Variable | Valor por defecto | Descripción |
@@ -115,9 +126,11 @@ exige `HeadBucket`:
 }
 ```
 
-**Alert** — escribe, lee y borra los originales. `s3:ListBucket` con prefijo
-`alerts/` evita que S3 responda 403 en lugar de `NoSuchKey` ante un objeto
-inexistente:
+**Alert** — escribe, lee y borra los originales. Tiene además `s3:ListBucket`
+sobre el bucket, **sin condición `s3:prefix`**: sin ese permiso, un objeto
+inexistente devuelve 403 en lugar de `NoSuchKey`, y la condición de prefijo
+no aplica a Get/Head, así que tampoco serviría. Exponer solo los nombres de
+las claves es aceptable, porque contienen `alert_id`s y no datos de usuario:
 
 ```json
 {
@@ -138,16 +151,15 @@ inexistente:
       "Sid": "AlertList",
       "Effect": "Allow",
       "Action": "s3:ListBucket",
-      "Resource": "arn:aws:s3:::EVIDENCE_BUCKET",
-      "Condition": {
-        "StringLike": { "s3:prefix": ["alerts/", "alerts/*"] }
-      }
+      "Resource": "arn:aws:s3:::EVIDENCE_BUCKET"
     }
   ]
 }
 ```
 
-**IA** — lee los originales y escribe las versiones redactadas:
+**IA** — lee los originales y escribe las versiones redactadas. Igual que
+Alert, tiene `s3:ListBucket` sobre el bucket sin condición, por el mismo
+motivo:
 
 ```json
 {
@@ -164,6 +176,12 @@ inexistente:
       "Effect": "Allow",
       "Action": "s3:PutObject",
       "Resource": "arn:aws:s3:::EVIDENCE_BUCKET/alerts/*/redacted/*"
+    },
+    {
+      "Sid": "IAList",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::EVIDENCE_BUCKET"
     }
   ]
 }
