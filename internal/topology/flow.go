@@ -78,6 +78,15 @@ func flow(base, eventRoutingKey string, cfg config.Config) flowQueues {
 	}
 }
 
+// ConsumerFlow devuelve, como una Topology sin exchanges, las tres colas y
+// los bindings del flujo de un consumidor, construidos por la misma función
+// que usa Platform. Permite declarar o borrar un único flujo sobre exchanges
+// ya declarados, por ejemplo en las pruebas de humo contra un broker real.
+func ConsumerFlow(base, eventRoutingKey string, cfg config.Config) Topology {
+	f := flow(base, eventRoutingKey, cfg)
+	return Topology{Queues: f.queues, Bindings: f.bindings}
+}
+
 // flowBase devuelve el nombre base <consumidor>.<evento> de una cola de
 // trabajo, es decir, su nombre sin el sufijo .q.
 func flowBase(workName string) string {

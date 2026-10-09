@@ -119,3 +119,17 @@ func TestFlow_DosConsumidoresDelMismoEventoNoComparteRetryNiDLQ(t *testing.T) {
 		}
 	}
 }
+
+func TestConsumerFlow_EsElMismoFlujoQueUsaPlatform(t *testing.T) {
+	cfg := testConfig()
+	f := flow(testBase, testEventKey, cfg)
+
+	got := ConsumerFlow(testBase, testEventKey, cfg)
+
+	if !reflect.DeepEqual(got.Queues, f.queues) || !reflect.DeepEqual(got.Bindings, f.bindings) {
+		t.Fatalf("ConsumerFlow = %+v, se esperaba el flujo de flow(): %+v", got, f)
+	}
+	if len(got.Exchanges) != 0 {
+		t.Fatalf("ConsumerFlow no debe declarar exchanges, declara %v", got.Exchanges)
+	}
+}

@@ -214,7 +214,10 @@ ENV=local go run ./cmd/reset
 
 No forma parte del arranque del sistema ni del `docker-compose.yml`: es una
 herramienta manual, pensada para forzar una redeclaración de topología
-durante el desarrollo sin reiniciar el contenedor del broker.
+durante el desarrollo sin reiniciar el contenedor del broker. Borra todas las
+colas y exchanges de la plataforma, incluidos los flujos de evidencia de
+US-08. Solo toca el broker: no se conecta a S3 ni modifica el bucket de
+evidencia, que persiste entre corridas.
 
 ### Limpieza de exchange huérfano (legacy)
 
@@ -228,12 +231,28 @@ administración del broker (`rabbitmqadmin delete exchange name=vinculo-vial.eve
 
 ### Smoke test de enrutamiento (requiere broker real)
 
-`internal/smoke` valida, contra un broker real, que un mensaje publicado en
-`vvi.topic.exchange` con una routing key del contrato llega efectivamente a
-la cola de trabajo que la topología le asocia a Notification: ejercita el
-binding real, no un canal simulado como el resto de la suite. Queda aislado
-con el build tag `smoke` para no formar parte de `go test ./...` ni requerir
-un broker disponible en la validación habitual.
+`internal/smoke` valida, contra un broker real, el ruteo que los tests
+unitarios con canal simulado no pueden demostrar. Queda aislado con el build
+tag `smoke` para no formar parte de `go test ./...` ni requerir un broker
+disponible en la validación habitual. Cubre:
+
+- **Ruteo por routing key:** un mensaje publicado en `vvi.topic.exchange` con
+  `alert.created` o `user.sessions.revoked` llega a la cola de trabajo de
+  Notification que la topología le asocia.
+- **Wildcard de IA:** `ia.evidence.validated.green`, `.yellow` y `.red`
+  llegan a `alert.ia-evidence-validated.q`, bindeada con
+  `ia.evidence.validated.*`.
+- **Reintento por nombre de cola:** con tres colas bindeadas a
+  `alert.rejected` (la de Identity y dos de prueba), un `nack` sin requeue en
+  una de las de prueba vuelve solo a esa cola, pasando por su `.retry`
+  (`x-death` lo registra). Las otras, que ya hicieron `ack`, no reciben una
+  segunda copia.
+- **DLQ por nombre de cola:** un mensaje publicado en `vvi.dlq.exchange` con
+  la routing key `W` queda solo en `W.dlq`.
+
+Las colas de prueba (`smoke-probe-*`) son de la propia prueba: se declaran con
+la misma función de flujo que usa la topología, con un `.retry` de 1 s para no
+esperar `RETRY_TTL_MS`, y se borran al terminar.
 
 ```
 RABBITMQ_URL=amqp://guest:guest@localhost:5672/ go test -tags smoke ./internal/smoke/...
@@ -241,9 +260,11 @@ RABBITMQ_URL=amqp://guest:guest@localhost:5672/ go test -tags smoke ./internal/s
 
 La prueba declara la topología vigente de forma idempotente antes de
 publicar, por lo que no depende de que `cmd/core` haya corrido antes. Antes
-de publicar verifica que las colas de trabajo no tengan consumidores activos
-y falla si los hay: el consumidor real de Notification debe estar detenido
-(`docker stop vinculo-vial-notification`), porque competiría por el mismo
+de publicar verifica que las colas de trabajo reales que usa no tengan
+consumidores activos y falla si los hay: deben estar detenidos los consumidores
+de `notification.alert-created.q`, `notification.sessions-revoked.q`,
+`identity.alert-rejected.q` y `alert.ia-evidence-validated.q` (por ejemplo,
+`docker stop vinculo-vial-notification`), porque competirían por el mismo
 mensaje.
 
 `docker compose up` requiere que exista de antemano la red externa
