@@ -23,6 +23,9 @@ func contractFlows() map[string]string {
 		"identity.alert-rejected.q":       "alert.rejected",
 		"identity.alert-reported.q":       "alert.reported",
 		"alert.user-status-changed.q":     "user.status.changed",
+		"notification.alert-rejected.q":   "alert.rejected",
+		"notification.alert-expired.q":    "alert.expired",
+		"notification.alert-seen.q":       "alert.seen",
 	}
 }
 
@@ -86,7 +89,7 @@ func TestTopicMatches(t *testing.T) {
 	}
 }
 
-func TestPlatform_DeclaraExactamenteLosSieteFlujosDelContrato(t *testing.T) {
+func TestPlatform_DeclaraExactamenteLosDiezFlujosDelContrato(t *testing.T) {
 	tp := Platform(testConfig())
 
 	want := []string{unroutedQueueName}
@@ -221,24 +224,28 @@ func TestPlatform_RetryYDLQDeCadaFlujoRecibenSoloSuPropioMensaje(t *testing.T) {
 	}
 }
 
-func TestPlatform_CadaEventoDelContratoLlegaSoloASuConsumidor(t *testing.T) {
+func TestPlatform_CadaEventoDelContratoLlegaSoloASusConsumidores(t *testing.T) {
 	tp := Platform(testConfig())
 
-	concreteKeys := map[string]string{
-		"alert.created":                "notification.alert-created.q",
-		"user.sessions.revoked":        "notification.sessions-revoked.q",
-		"alert.evidence.uploaded":      "ia.alert-evidence-uploaded.q",
-		"ia.evidence.validated.green":  iaValidatedWork,
-		"ia.evidence.validated.yellow": iaValidatedWork,
-		"ia.evidence.validated.red":    iaValidatedWork,
-		"alert.rejected":               "identity.alert-rejected.q",
-		"alert.reported":               "identity.alert-reported.q",
-		"user.status.changed":          "alert.user-status-changed.q",
+	// alert.rejected tiene dos consumidores contratados: Identity (penaliza) y
+	// Notification (avisa al emisor), cada uno con su propia cola de trabajo.
+	concreteKeys := map[string][]string{
+		"alert.created":                {"notification.alert-created.q"},
+		"user.sessions.revoked":        {"notification.sessions-revoked.q"},
+		"alert.evidence.uploaded":      {"ia.alert-evidence-uploaded.q"},
+		"ia.evidence.validated.green":  {iaValidatedWork},
+		"ia.evidence.validated.yellow": {iaValidatedWork},
+		"ia.evidence.validated.red":    {iaValidatedWork},
+		"alert.rejected":               {"identity.alert-rejected.q", "notification.alert-rejected.q"},
+		"alert.reported":               {"identity.alert-reported.q"},
+		"user.status.changed":          {"alert.user-status-changed.q"},
+		"alert.expired":                {"notification.alert-expired.q"},
+		"alert.seen":                   {"notification.alert-seen.q"},
 	}
 
 	for key, want := range concreteKeys {
-		if got := queuesMatching(tp, "vvi.topic.exchange", key); !reflect.DeepEqual(got, []string{want}) {
-			t.Errorf("publicar %q en vvi.topic.exchange llega a %v, se esperaba solo [%q]", key, got, want)
+		if got := queuesMatching(tp, "vvi.topic.exchange", key); !reflect.DeepEqual(got, want) {
+			t.Errorf("publicar %q en vvi.topic.exchange llega a %v, se esperaba %v", key, got, want)
 		}
 	}
 }

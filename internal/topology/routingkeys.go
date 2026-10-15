@@ -31,4 +31,12 @@ const (
 	// UserStatusChangedRoutingKey es la routing key del evento publicado por
 	// vinculo-vial-identity al cambiar el estado de la cuenta de un usuario.
 	UserStatusChangedRoutingKey = "user.status.changed"
+
+	// AlertExpiredRoutingKey es la routing key del evento publicado por
+	// vinculo-vial-alert cuando una alerta vence sin veredicto (EXPIRED).
+	AlertExpiredRoutingKey = "alert.expired"
+
+	// AlertSeenRoutingKey es la routing key del evento publicado por
+	// vinculo-vial-alert cuando el primer dueño abre el chat de una alerta.
+	AlertSeenRoutingKey = "alert.seen"
 )

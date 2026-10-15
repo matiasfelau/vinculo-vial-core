@@ -24,6 +24,33 @@ docker compose up --build
 bucket (ver la sección siguiente): sin `S3_REGION`, `EVIDENCE_BUCKET` y
 credenciales AWS, el job termina con error.
 
+## Colas de la plataforma
+
+Cada flujo declara tres colas durables: `W` (trabajo, `<consumidor>.<evento>.q`),
+`W.retry` y `W.dlq`. El retry y la DLQ se rutean por el nombre de `W`, no por
+la routing key del evento. Todas las colas de trabajo se ligan a
+`vvi.topic.exchange`.
+
+| Cola de trabajo (`W`) | Binding | Productor → consumidor | CU |
+|---|---|---|---|
+| `notification.alert-created.q` | `alert.created` | Alert → Notification | existente |
+| `notification.sessions-revoked.q` | `user.sessions.revoked` | Identity → Notification | existente |
+| `ia.alert-evidence-uploaded.q` | `alert.evidence.uploaded` | Alert → IA | US-08 |
+| `alert.ia-evidence-validated.q` | `ia.evidence.validated.*` | IA → Alert | US-08 |
+| `identity.alert-rejected.q` | `alert.rejected` | Alert → Identity | US-08 |
+| `identity.alert-reported.q` | `alert.reported` | Alert → Identity | US-08 |
+| `alert.user-status-changed.q` | `user.status.changed` | Identity → Alert | US-08 |
+| `notification.alert-rejected.q` | `alert.rejected` | Alert → Notification | US-09 |
+| `notification.alert-expired.q` | `alert.expired` | Alert → Notification | US-09 |
+| `notification.alert-seen.q` | `alert.seen` | Alert → Notification | US-09 |
+
+`vvi.unrouted.q` recibe, vía `alternate-exchange`, lo que no matchea ninguna
+cola. `alert.rejected` tiene dos consumidores (Identity y Notification), cada
+uno con su propia cola: un fallo en uno no reentrega al otro.
+
+Las colas de US-09 son aditivas: en un broker con estado no hay `406`, solo se
+declaran las nuevas.
+
 ## Bucket de evidencia (AWS S3)
 
 Core es el único que declara el bucket de evidencia. En cada corrida:
@@ -215,8 +242,8 @@ ENV=local go run ./cmd/reset
 No forma parte del arranque del sistema ni del `docker-compose.yml`: es una
 herramienta manual, pensada para forzar una redeclaración de topología
 durante el desarrollo sin reiniciar el contenedor del broker. Borra todas las
-colas y exchanges de la plataforma, incluidos los flujos de evidencia de
-US-08. Solo toca el broker: no se conecta a S3 ni modifica el bucket de
+colas y exchanges de la plataforma, incluidos los flujos de
+US-08 y US-09. Solo toca el broker: no se conecta a S3 ni modifica el bucket de
 evidencia, que persiste entre corridas.
 
 ### Limpieza de exchange huérfano (legacy)
