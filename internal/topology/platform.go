@@ -29,6 +29,8 @@ func consumerFlows() []flowSpec {
 		{base: "notification.alert-rejected", eventRoutingKey: AlertRejectedRoutingKey},
 		{base: "notification.alert-expired", eventRoutingKey: AlertExpiredRoutingKey},
 		{base: "notification.alert-seen", eventRoutingKey: AlertSeenRoutingKey},
+		{base: "alert.vehicle-pending-claimed", eventRoutingKey: VehiclePendingClaimedRoutingKey},
+		{base: "notification.alert-pending-delivered", eventRoutingKey: AlertPendingDeliveredRoutingKey},
 	}
 }
 

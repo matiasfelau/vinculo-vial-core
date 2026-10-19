@@ -16,16 +16,18 @@ const (
 // trabajo W → patrón de binding en el exchange principal.
 func contractFlows() map[string]string {
 	return map[string]string{
-		"notification.alert-created.q":    "alert.created",
-		"notification.sessions-revoked.q": "user.sessions.revoked",
-		"ia.alert-evidence-uploaded.q":    "alert.evidence.uploaded",
-		iaValidatedWork:                   "ia.evidence.validated.*",
-		"identity.alert-rejected.q":       "alert.rejected",
-		"identity.alert-reported.q":       "alert.reported",
-		"alert.user-status-changed.q":     "user.status.changed",
-		"notification.alert-rejected.q":   "alert.rejected",
-		"notification.alert-expired.q":    "alert.expired",
-		"notification.alert-seen.q":       "alert.seen",
+		"notification.alert-created.q":           "alert.created",
+		"notification.sessions-revoked.q":        "user.sessions.revoked",
+		"ia.alert-evidence-uploaded.q":           "alert.evidence.uploaded",
+		iaValidatedWork:                          "ia.evidence.validated.*",
+		"identity.alert-rejected.q":              "alert.rejected",
+		"identity.alert-reported.q":              "alert.reported",
+		"alert.user-status-changed.q":            "user.status.changed",
+		"notification.alert-rejected.q":          "alert.rejected",
+		"notification.alert-expired.q":           "alert.expired",
+		"notification.alert-seen.q":              "alert.seen",
+		"alert.vehicle-pending-claimed.q":        "vehicle.pending.claimed",
+		"notification.alert-pending-delivered.q": "alert.pending.delivered",
 	}
 }
 
@@ -89,7 +91,7 @@ func TestTopicMatches(t *testing.T) {
 	}
 }
 
-func TestPlatform_DeclaraExactamenteLosDiezFlujosDelContrato(t *testing.T) {
+func TestPlatform_DeclaraExactamenteLosDoceFlujosDelContrato(t *testing.T) {
 	tp := Platform(testConfig())
 
 	want := []string{unroutedQueueName}
@@ -241,6 +243,8 @@ func TestPlatform_CadaEventoDelContratoLlegaSoloASusConsumidores(t *testing.T) {
 		"user.status.changed":          {"alert.user-status-changed.q"},
 		"alert.expired":                {"notification.alert-expired.q"},
 		"alert.seen":                   {"notification.alert-seen.q"},
+		"vehicle.pending.claimed":      {"alert.vehicle-pending-claimed.q"},
+		"alert.pending.delivered":      {"notification.alert-pending-delivered.q"},
 	}
 
 	for key, want := range concreteKeys {

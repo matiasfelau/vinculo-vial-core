@@ -39,4 +39,14 @@ const (
 	// AlertSeenRoutingKey es la routing key del evento publicado por
 	// vinculo-vial-alert cuando el primer dueño abre el chat de una alerta.
 	AlertSeenRoutingKey = "alert.seen"
+
+	// VehiclePendingClaimedRoutingKey es la routing key del evento publicado
+	// por vinculo-vial-vehicle cuando un usuario vincula una patente que tenía
+	// alertas pendientes de entrega.
+	VehiclePendingClaimedRoutingKey = "vehicle.pending.claimed"
+
+	// AlertPendingDeliveredRoutingKey es la routing key del evento publicado
+	// por vinculo-vial-alert al entregar en lote las alertas pendientes al
+	// dueño que vinculó la patente.
+	AlertPendingDeliveredRoutingKey = "alert.pending.delivered"
 )
