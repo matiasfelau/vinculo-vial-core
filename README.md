@@ -43,12 +43,14 @@ la routing key del evento. Todas las colas de trabajo se ligan a
 | `notification.alert-rejected.q` | `alert.rejected` | Alert → Notification | US-09 |
 | `notification.alert-expired.q` | `alert.expired` | Alert → Notification | US-09 |
 | `notification.alert-seen.q` | `alert.seen` | Alert → Notification | US-09 |
+| `alert.vehicle-pending-claimed.q` | `vehicle.pending.claimed` | Vehicle → Alert | US-10 |
+| `notification.alert-pending-delivered.q` | `alert.pending.delivered` | Alert → Notification | US-10 |
 
 `vvi.unrouted.q` recibe, vía `alternate-exchange`, lo que no matchea ninguna
 cola. `alert.rejected` tiene dos consumidores (Identity y Notification), cada
 uno con su propia cola: un fallo en uno no reentrega al otro.
 
-Las colas de US-09 son aditivas: en un broker con estado no hay `406`, solo se
+Las colas de US-09 y US-10 son aditivas: en un broker con estado no hay `406`, solo se
 declaran las nuevas.
 
 ## Bucket de evidencia (AWS S3)
@@ -243,7 +245,7 @@ No forma parte del arranque del sistema ni del `docker-compose.yml`: es una
 herramienta manual, pensada para forzar una redeclaración de topología
 durante el desarrollo sin reiniciar el contenedor del broker. Borra todas las
 colas y exchanges de la plataforma, incluidos los flujos de
-US-08 y US-09. Solo toca el broker: no se conecta a S3 ni modifica el bucket de
+US-08, US-09 y US-10. Solo toca el broker: no se conecta a S3 ni modifica el bucket de
 evidencia, que persiste entre corridas.
 
 ### Limpieza de exchange huérfano (legacy)
