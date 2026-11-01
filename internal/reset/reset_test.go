@@ -4,9 +4,11 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/vinculo-vial/core-service/internal/topology"
+	"github.com/vinculo-vial/core-service/pkg/config"
 )
 
 type fakeChannel struct {
@@ -89,5 +91,65 @@ func TestResetter_Apply_ErrorEnExchange(t *testing.T) {
 	err := r.Apply(sampleTopology())
 	if !errors.Is(err, original) {
 		t.Fatalf("el error no envuelve la causa original: %v", err)
+	}
+}
+
+func TestResetter_Apply_CubreTodaLaTopologiaDeLaPlataforma(t *testing.T) {
+	cfg := config.Config{
+		MainExchange:     "vvi.topic.exchange",
+		RetryExchange:    "vvi.retry.exchange",
+		DLQExchange:      "vvi.dlq.exchange",
+		UnroutedExchange: "vvi.unrouted.exchange",
+		RetryTTLMs:       30000,
+	}
+	platform := topology.Platform(cfg)
+	fake := &fakeChannel{}
+
+	if err := New(fake, silentLogger()).Apply(platform); err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+
+	wantCalls := len(platform.Queues) + len(platform.Exchanges)
+	if len(fake.calls) != wantCalls {
+		t.Fatalf("el reset hizo %d borrados, se esperaban %d (una por cola y por exchange)", len(fake.calls), wantCalls)
+	}
+
+	deleted := map[string]bool{}
+	lastQueue, firstExchange := -1, len(fake.calls)
+	for i, c := range fake.calls {
+		deleted[c] = true
+		if strings.HasPrefix(c, "queue:") {
+			lastQueue = i
+		} else if i < firstExchange {
+			firstExchange = i
+		}
+	}
+	if lastQueue > firstExchange {
+		t.Fatal("el reset debe borrar todas las colas antes que cualquier exchange")
+	}
+
+	// Las colas de los flujos de US-08, US-09 y US-10 forman parte del reset.
+	for _, work := range []string{
+		"ia.alert-evidence-uploaded",
+		"alert.ia-evidence-validated",
+		"identity.alert-rejected",
+		"identity.alert-reported",
+		"alert.user-status-changed",
+		"notification.alert-rejected",
+		"notification.alert-expired",
+		"notification.alert-seen",
+		"alert.vehicle-pending-claimed",
+		"notification.alert-pending-delivered",
+	} {
+		for _, suffix := range []string{".q", ".retry", ".dlq"} {
+			if !deleted["queue:"+work+suffix] {
+				t.Errorf("el reset no borró la cola %s", work+suffix)
+			}
+		}
+	}
+	for _, name := range []string{"vvi.unrouted.q"} {
+		if !deleted["queue:"+name] {
+			t.Errorf("el reset no borró la cola %s", name)
+		}
 	}
 }

@@ -1,7 +1,8 @@
 // Command core es el job de inicialización de infraestructura: declara la
-// topología estándar de RabbitMQ de forma idempotente, la verifica y
-// termina. No consume ni publica eventos de negocio, y no expone puertos
-// ni HTTP: su salud es su código de salida.
+// topología estándar de RabbitMQ y el bucket de evidencia de S3 de forma
+// idempotente, los verifica y termina. No consume ni publica eventos de
+// negocio, no lee ni escribe objetos, y no expone puertos ni HTTP: su salud
+// es su código de salida.
 package main
 
 import (
@@ -14,6 +15,7 @@ import (
 	amqplib "github.com/rabbitmq/amqp091-go"
 
 	vviamqp "github.com/vinculo-vial/core-service/internal/amqp"
+	"github.com/vinculo-vial/core-service/internal/storage"
 	"github.com/vinculo-vial/core-service/internal/topology"
 	"github.com/vinculo-vial/core-service/internal/verify"
 	"github.com/vinculo-vial/core-service/pkg/config"
@@ -22,6 +24,15 @@ import (
 const (
 	brokerWaitTimeout   = 30 * time.Second
 	brokerRetryInterval = 2 * time.Second
+
+	// s3StageTimeout acota todo el tramo de S3 (espera, declaración y
+	// verificación); cada operación individual se acota además con
+	// S3_TIMEOUT_MS.
+	s3StageTimeout = 2 * time.Minute
+
+	s3WaitTimeout    = 30 * time.Second
+	s3InitialBackoff = 500 * time.Millisecond
+	s3MaxBackoff     = 5 * time.Second
 )
 
 func main() {
@@ -32,11 +43,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger.Info("topología declarada y verificada correctamente")
+	logger.Info("topología y bucket de evidencia declarados y verificados correctamente")
 }
 
 func run(logger *slog.Logger) error {
 	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+
+	storageCfg, err := config.LoadStorage()
 	if err != nil {
 		return err
 	}
@@ -52,8 +68,8 @@ func run(logger *slog.Logger) error {
 	}
 	defer conn.Close()
 
-	t := topology.Notification(cfg)
-	if err := t.Validate(); err != nil {
+	t := topology.Platform(cfg)
+	if err := t.Validate(cfg); err != nil {
 		return fmt.Errorf("modelo de topología inconsistente: %w", err)
 	}
 
@@ -65,6 +81,28 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
+	return provisionBucket(storageCfg, logger)
+}
+
+// provisionBucket declara el bucket de evidencia en S3 y verifica que su
+// configuración coincida con lo declarado. Cualquier fallo es fatal.
+func provisionBucket(cfg config.StorageConfig, logger *slog.Logger) error {
+	ctx, cancel := context.WithTimeout(context.Background(), s3StageTimeout)
+	defer cancel()
+
+	client, err := storage.NewClient(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("creando el cliente de S3: %w", err)
+	}
+
+	wait := storage.WaitOptions{Timeout: s3WaitTimeout, InitialBackoff: s3InitialBackoff, MaxBackoff: s3MaxBackoff}
+	if err := storage.NewProvisioner(client, cfg, wait, logger).Apply(ctx); err != nil {
+		return fmt.Errorf("declarando el bucket de evidencia: %w", err)
+	}
+
+	if err := verify.NewBucketVerifier(client, cfg).Verify(ctx); err != nil {
+		return fmt.Errorf("verificando el bucket de evidencia: %w", err)
+	}
 	return nil
 }
 

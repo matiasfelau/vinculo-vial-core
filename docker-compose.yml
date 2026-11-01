@@ -54,6 +54,17 @@ services:
       RABBITMQ_DLQ_EXCHANGE: ${RABBITMQ_DLQ_EXCHANGE:-vvi.dlq.exchange}
       RABBITMQ_UNROUTED_EXCHANGE: ${RABBITMQ_UNROUTED_EXCHANGE:-vvi.unrouted.exchange}
       RETRY_TTL_MS: ${RETRY_TTL_MS:-30000}
+      # Bucket de evidencia en AWS S3 (no hay emulador local). Los valores
+      # vienen de .env, que está ignorado por git: el compose solo los
+      # referencia, nunca los contiene. Sin ellos, "up" falla antes de
+      # arrancar el contenedor.
+      S3_REGION: ${S3_REGION:?definir S3_REGION en .env}
+      S3_TIMEOUT_MS: ${S3_TIMEOUT_MS:-5000}
+      EVIDENCE_BUCKET: ${EVIDENCE_BUCKET:?definir EVIDENCE_BUCKET en .env}
+      EVIDENCE_PENDING_DAYS: ${EVIDENCE_PENDING_DAYS:-2}
+      EVIDENCE_QUARANTINE_DAYS: ${EVIDENCE_QUARANTINE_DAYS:-15}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?definir AWS_ACCESS_KEY_ID en .env}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?definir AWS_SECRET_ACCESS_KEY en .env}
     networks:
       - vinculo-vial
 
@@ -70,4 +81,5 @@ networks:
 # persistentes por diseño, para que cada ciclo down/up ejercite la
 # declaración de topología contra un estado vacío. La convención
 # vinculo-vial-[nombre]-data no tiene ningún volumen al que aplicarse
-# todavía.
+# todavía. El bucket de evidencia vive en AWS S3, no en este compose, y
+# persiste entre corridas.
