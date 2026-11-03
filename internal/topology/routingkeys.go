@@ -49,4 +49,9 @@ const (
 	// por vinculo-vial-alert al entregar en lote las alertas pendientes al
 	// dueño que vinculó la patente.
 	AlertPendingDeliveredRoutingKey = "alert.pending.delivered"
+
+	// UserDeletedRoutingKey es la routing key del evento publicado por
+	// vinculo-vial-identity al dar de baja la cuenta de un usuario. Tiene dos
+	// consumidores (Alert y Vehicle), cada uno con su propia cola de trabajo.
+	UserDeletedRoutingKey = "user.deleted"
 )
