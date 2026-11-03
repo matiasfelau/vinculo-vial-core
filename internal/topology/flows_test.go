@@ -28,6 +28,8 @@ func contractFlows() map[string]string {
 		"notification.alert-seen.q":              "alert.seen",
 		"alert.vehicle-pending-claimed.q":        "vehicle.pending.claimed",
 		"notification.alert-pending-delivered.q": "alert.pending.delivered",
+		"alert.user-deleted.q":                   "user.deleted",
+		"vehicle.user-deleted.q":                 "user.deleted",
 	}
 }
 
@@ -91,7 +93,7 @@ func TestTopicMatches(t *testing.T) {
 	}
 }
 
-func TestPlatform_DeclaraExactamenteLosDoceFlujosDelContrato(t *testing.T) {
+func TestPlatform_DeclaraExactamenteLosCatorceFlujosDelContrato(t *testing.T) {
 	tp := Platform(testConfig())
 
 	want := []string{unroutedQueueName}
@@ -231,6 +233,7 @@ func TestPlatform_CadaEventoDelContratoLlegaSoloASusConsumidores(t *testing.T) {
 
 	// alert.rejected tiene dos consumidores contratados: Identity (penaliza) y
 	// Notification (avisa al emisor), cada uno con su propia cola de trabajo.
+	// user.deleted también tiene dos: Alert y Vehicle.
 	concreteKeys := map[string][]string{
 		"alert.created":                {"notification.alert-created.q"},
 		"user.sessions.revoked":        {"notification.sessions-revoked.q"},
@@ -245,6 +248,7 @@ func TestPlatform_CadaEventoDelContratoLlegaSoloASusConsumidores(t *testing.T) {
 		"alert.seen":                   {"notification.alert-seen.q"},
 		"vehicle.pending.claimed":      {"alert.vehicle-pending-claimed.q"},
 		"alert.pending.delivered":      {"notification.alert-pending-delivered.q"},
+		"user.deleted":                 {"alert.user-deleted.q", "vehicle.user-deleted.q"},
 	}
 
 	for key, want := range concreteKeys {

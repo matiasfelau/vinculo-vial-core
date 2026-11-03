@@ -45,12 +45,14 @@ la routing key del evento. Todas las colas de trabajo se ligan a
 | `notification.alert-seen.q` | `alert.seen` | Alert → Notification | US-09 |
 | `alert.vehicle-pending-claimed.q` | `vehicle.pending.claimed` | Vehicle → Alert | US-10 |
 | `notification.alert-pending-delivered.q` | `alert.pending.delivered` | Alert → Notification | US-10 |
+| `alert.user-deleted.q` | `user.deleted` | Identity → Alert | US-11 |
+| `vehicle.user-deleted.q` | `user.deleted` | Identity → Vehicle | US-11 |
 
 `vvi.unrouted.q` recibe, vía `alternate-exchange`, lo que no matchea ninguna
-cola. `alert.rejected` tiene dos consumidores (Identity y Notification), cada
+cola. `alert.rejected` y `user.deleted` tienen dos consumidores cada uno, cada
 uno con su propia cola: un fallo en uno no reentrega al otro.
 
-Las colas de US-09 y US-10 son aditivas: en un broker con estado no hay `406`, solo se
+Las colas de US-09, US-10 y US-11 son aditivas: en un broker con estado no hay `406`, solo se
 declaran las nuevas.
 
 ## Bucket de evidencia (AWS S3)
@@ -245,7 +247,7 @@ No forma parte del arranque del sistema ni del `docker-compose.yml`: es una
 herramienta manual, pensada para forzar una redeclaración de topología
 durante el desarrollo sin reiniciar el contenedor del broker. Borra todas las
 colas y exchanges de la plataforma, incluidos los flujos de
-US-08, US-09 y US-10. Solo toca el broker: no se conecta a S3 ni modifica el bucket de
+US-08, US-09, US-10 y US-11. Solo toca el broker: no se conecta a S3 ni modifica el bucket de
 evidencia, que persiste entre corridas.
 
 ### Limpieza de exchange huérfano (legacy)
@@ -278,6 +280,10 @@ disponible en la validación habitual. Cubre:
   segunda copia.
 - **DLQ por nombre de cola:** un mensaje publicado en `vvi.dlq.exchange` con
   la routing key `W` queda solo en `W.dlq`.
+- **`user.deleted` (US-11):** el mensaje llega a `alert.user-deleted.q` y a
+  `vehicle.user-deleted.q`. Con esas dos y dos colas de prueba bindeadas al
+  mismo evento, un `nack` sin requeue en una de las de prueba vuelve solo a
+  esa cola.
 
 Las colas de prueba (`smoke-probe-*`) son de la propia prueba: se declaran con
 la misma función de flujo que usa la topología, con un `.retry` de 1 s para no
@@ -292,7 +298,8 @@ publicar, por lo que no depende de que `cmd/core` haya corrido antes. Antes
 de publicar verifica que las colas de trabajo reales que usa no tengan
 consumidores activos y falla si los hay: deben estar detenidos los consumidores
 de `notification.alert-created.q`, `notification.sessions-revoked.q`,
-`identity.alert-rejected.q` y `alert.ia-evidence-validated.q` (por ejemplo,
+`identity.alert-rejected.q`, `alert.ia-evidence-validated.q`,
+`alert.user-deleted.q` y `vehicle.user-deleted.q` (por ejemplo,
 `docker stop vinculo-vial-notification`), porque competirían por el mismo
 mensaje.
 
