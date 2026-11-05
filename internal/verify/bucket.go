@@ -22,6 +22,7 @@ const (
 	codeNoPublicAccessBlock = "NoSuchPublicAccessBlockConfiguration"
 	codeNoEncryption        = "ServerSideEncryptionConfigurationNotFoundError"
 	codeNoLifecycle         = "NoSuchLifecycleConfiguration"
+	codeNoObjectLock        = "ObjectLockConfigurationNotFoundError"
 )
 
 // BucketAPI es el subconjunto del cliente S3 necesario para verificar el
@@ -33,30 +34,34 @@ type BucketAPI interface {
 	GetBucketEncryption(ctx context.Context, in *s3.GetBucketEncryptionInput, optFns ...func(*s3.Options)) (*s3.GetBucketEncryptionOutput, error)
 	GetBucketVersioning(ctx context.Context, in *s3.GetBucketVersioningInput, optFns ...func(*s3.Options)) (*s3.GetBucketVersioningOutput, error)
 	GetBucketLifecycleConfiguration(ctx context.Context, in *s3.GetBucketLifecycleConfigurationInput, optFns ...func(*s3.Options)) (*s3.GetBucketLifecycleConfigurationOutput, error)
+	GetObjectLockConfiguration(ctx context.Context, in *s3.GetObjectLockConfigurationInput, optFns ...func(*s3.Options)) (*s3.GetObjectLockConfigurationOutput, error)
 }
 
-// BucketVerifier confirma que el bucket de evidencia existe y que su
-// configuración coincide con la que storage.Provisioner declara.
+// BucketVerifier confirma que un bucket existe y que su configuración
+// coincide con la que storage.Provisioner declara para su BucketSpec.
 type BucketVerifier struct {
-	api BucketAPI
-	cfg config.StorageConfig
+	api  BucketAPI
+	spec storage.BucketSpec
+	cfg  config.StorageConfig
 }
 
-// NewBucketVerifier construye un BucketVerifier sobre el cliente dado.
-func NewBucketVerifier(api BucketAPI, cfg config.StorageConfig) *BucketVerifier {
-	return &BucketVerifier{api: api, cfg: cfg}
+// NewBucketVerifier construye un BucketVerifier del bucket spec sobre el
+// cliente dado. cfg aporta el timeout por operación.
+func NewBucketVerifier(api BucketAPI, spec storage.BucketSpec, cfg config.StorageConfig) *BucketVerifier {
+	return &BucketVerifier{api: api, spec: spec, cfg: cfg}
 }
 
 // Verify comprueba la existencia del bucket (HeadBucket) y, si existe, su
-// Block Public Access, cifrado, versionado y lifecycle contra lo esperado.
-// Cualquier diferencia o error de consulta falla (fail-closed); los
-// problemas se reportan todos juntos para facilitar el diagnóstico.
+// Block Public Access, cifrado, versionado, lifecycle y, cuando la
+// especificación lo pide, Object Lock contra lo esperado. Cualquier
+// diferencia o error de consulta falla (fail-closed); los problemas se
+// reportan todos juntos para facilitar el diagnóstico.
 func (v *BucketVerifier) Verify(ctx context.Context) error {
 	if err := v.call(ctx, func(ctx context.Context) error {
-		_, err := v.api.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(v.cfg.Bucket)})
+		_, err := v.api.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(v.spec.Name)})
 		return err
 	}); err != nil {
-		return fmt.Errorf("el bucket %q no es accesible en S3: %w", v.cfg.Bucket, err)
+		return fmt.Errorf("el bucket %q no es accesible en S3: %w", v.spec.Name, err)
 	}
 
 	problems := []error{
@@ -65,8 +70,11 @@ func (v *BucketVerifier) Verify(ctx context.Context) error {
 		v.checkVersioning(ctx),
 		v.checkLifecycle(ctx),
 	}
+	if v.spec.ObjectLock {
+		problems = append(problems, v.checkObjectLock(ctx))
+	}
 	if err := errors.Join(problems...); err != nil {
-		return fmt.Errorf("el bucket %q no coincide con lo declarado: %w", v.cfg.Bucket, err)
+		return fmt.Errorf("el bucket %q no coincide con lo declarado: %w", v.spec.Name, err)
 	}
 	return nil
 }
@@ -74,7 +82,7 @@ func (v *BucketVerifier) Verify(ctx context.Context) error {
 func (v *BucketVerifier) checkPublicAccessBlock(ctx context.Context) error {
 	var out *s3.GetPublicAccessBlockOutput
 	err := v.call(ctx, func(ctx context.Context) (err error) {
-		out, err = v.api.GetPublicAccessBlock(ctx, &s3.GetPublicAccessBlockInput{Bucket: aws.String(v.cfg.Bucket)})
+		out, err = v.api.GetPublicAccessBlock(ctx, &s3.GetPublicAccessBlockInput{Bucket: aws.String(v.spec.Name)})
 		return err
 	})
 	if hasErrorCode(err, codeNoPublicAccessBlock) {
@@ -110,7 +118,7 @@ func (v *BucketVerifier) checkPublicAccessBlock(ctx context.Context) error {
 func (v *BucketVerifier) checkEncryption(ctx context.Context) error {
 	var out *s3.GetBucketEncryptionOutput
 	err := v.call(ctx, func(ctx context.Context) (err error) {
-		out, err = v.api.GetBucketEncryption(ctx, &s3.GetBucketEncryptionInput{Bucket: aws.String(v.cfg.Bucket)})
+		out, err = v.api.GetBucketEncryption(ctx, &s3.GetBucketEncryptionInput{Bucket: aws.String(v.spec.Name)})
 		return err
 	})
 	if hasErrorCode(err, codeNoEncryption) {
@@ -133,24 +141,62 @@ func (v *BucketVerifier) checkEncryption(ctx context.Context) error {
 func (v *BucketVerifier) checkVersioning(ctx context.Context) error {
 	var out *s3.GetBucketVersioningOutput
 	err := v.call(ctx, func(ctx context.Context) (err error) {
-		out, err = v.api.GetBucketVersioning(ctx, &s3.GetBucketVersioningInput{Bucket: aws.String(v.cfg.Bucket)})
+		out, err = v.api.GetBucketVersioning(ctx, &s3.GetBucketVersioningInput{Bucket: aws.String(v.spec.Name)})
 		return err
 	})
 	if err != nil {
 		return fmt.Errorf("consultando el versionado: %w", err)
 	}
 
-	if out.Status == types.BucketVersioningStatusEnabled {
+	enabled := out.Status == types.BucketVersioningStatusEnabled
+	switch {
+	case v.spec.ObjectLock && !enabled:
+		return fmt.Errorf("el versionado no está habilitado y el bucket con Object Lock lo exige (estado %q): "+
+			"Core no lo modifica por su cuenta", out.Status)
+	case !v.spec.ObjectLock && enabled:
 		return errors.New("el versionado está habilitado y el contrato lo exige deshabilitado: " +
 			"Core no lo modifica por su cuenta; suspenderlo o recrear el bucket vacío requiere una decisión manual")
 	}
 	return nil
 }
 
+// checkObjectLock exige Object Lock habilitado y sin retención por defecto:
+// la retención la fija el dueño del bucket en cada objeto. Object Lock solo
+// se puede habilitar al crear el bucket, así que ante un bucket existente que
+// no lo tiene la única salida es recrearlo, decisión que Core no toma.
+func (v *BucketVerifier) checkObjectLock(ctx context.Context) error {
+	var out *s3.GetObjectLockConfigurationOutput
+	err := v.call(ctx, func(ctx context.Context) (err error) {
+		out, err = v.api.GetObjectLockConfiguration(ctx, &s3.GetObjectLockConfigurationInput{Bucket: aws.String(v.spec.Name)})
+		return err
+	})
+	if hasErrorCode(err, codeNoObjectLock) {
+		return v.objectLockDisabled()
+	}
+	if err != nil {
+		return fmt.Errorf("consultando Object Lock: %w", err)
+	}
+
+	cfg := out.ObjectLockConfiguration
+	if cfg == nil || cfg.ObjectLockEnabled != types.ObjectLockEnabledEnabled {
+		return v.objectLockDisabled()
+	}
+	if cfg.Rule != nil {
+		return errors.New("Object Lock tiene una retención por defecto y el contrato no la admite: " +
+			"la fija el dueño del bucket en cada objeto")
+	}
+	return nil
+}
+
+func (v *BucketVerifier) objectLockDisabled() error {
+	return fmt.Errorf("el bucket existe sin Object Lock y no se puede habilitar en un bucket existente: "+
+		"Core no lo borra ni lo recrea; hay que eliminarlo a mano (vacío) o definir otro %s", v.spec.EnvVar)
+}
+
 func (v *BucketVerifier) checkLifecycle(ctx context.Context) error {
 	var out *s3.GetBucketLifecycleConfigurationOutput
 	err := v.call(ctx, func(ctx context.Context) (err error) {
-		out, err = v.api.GetBucketLifecycleConfiguration(ctx, &s3.GetBucketLifecycleConfigurationInput{Bucket: aws.String(v.cfg.Bucket)})
+		out, err = v.api.GetBucketLifecycleConfiguration(ctx, &s3.GetBucketLifecycleConfigurationInput{Bucket: aws.String(v.spec.Name)})
 		return err
 	})
 	if hasErrorCode(err, codeNoLifecycle) {
@@ -160,7 +206,7 @@ func (v *BucketVerifier) checkLifecycle(ctx context.Context) error {
 		return fmt.Errorf("consultando el lifecycle: %w", err)
 	}
 
-	want := summarize(storage.LifecycleRules(v.cfg))
+	want := summarize(v.spec.Rules)
 	got := summarize(out.Rules)
 	if !slices.Equal(want, got) {
 		return fmt.Errorf("el lifecycle difiere de lo declarado: se esperaba [%s], se encontró [%s]",
@@ -200,18 +246,32 @@ func summarizeRule(r types.LifecycleRule) string {
 		}
 	}
 
-	var days int32
-	if r.Expiration != nil {
-		days = aws.ToInt32(r.Expiration.Days)
+	// La expiración por días solo se resume si la regla la tiene: la regla de
+	// Audit no expira objetos vigentes.
+	var expira string
+	if r.Expiration != nil && r.Expiration.Days != nil {
+		expira = fmt.Sprintf(" expira=%dd", aws.ToInt32(r.Expiration.Days))
+	}
+
+	// Las acciones de versiones no vigentes y de delete markers se resumen con
+	// sus valores (las usa el lifecycle de Audit); cualquier otra acción no
+	// declarada se marca como adicional.
+	var noncurrent, deleteMarker string
+	if r.NoncurrentVersionExpiration != nil {
+		noncurrent = fmt.Sprintf(" noncurrent=%dd", aws.ToInt32(r.NoncurrentVersionExpiration.NoncurrentDays))
+	}
+	if r.Expiration != nil && aws.ToBool(r.Expiration.ExpiredObjectDeleteMarker) {
+		deleteMarker = " delete-marker=true"
 	}
 
 	var extraActions string
-	if len(r.Transitions) > 0 || r.NoncurrentVersionExpiration != nil || len(r.NoncurrentVersionTransitions) > 0 ||
-		r.AbortIncompleteMultipartUpload != nil || (r.Expiration != nil && (r.Expiration.Date != nil || r.Expiration.ExpiredObjectDeleteMarker != nil)) {
+	if len(r.Transitions) > 0 || len(r.NoncurrentVersionTransitions) > 0 || r.AbortIncompleteMultipartUpload != nil ||
+		(r.NoncurrentVersionExpiration != nil && r.NoncurrentVersionExpiration.NewerNoncurrentVersions != nil) ||
+		(r.Expiration != nil && r.Expiration.Date != nil) {
 		extraActions = " +acciones-adicionales"
 	}
 
-	return fmt.Sprintf("%s %s tag[%s] expira=%dd%s%s", aws.ToString(r.ID), r.Status, tag, days, extraFilter, extraActions)
+	return fmt.Sprintf("%s %s tag[%s]%s%s%s%s%s", aws.ToString(r.ID), r.Status, tag, expira, noncurrent, deleteMarker, extraFilter, extraActions)
 }
 
 // hasErrorCode indica si err es un error de API de S3 con el código dado.

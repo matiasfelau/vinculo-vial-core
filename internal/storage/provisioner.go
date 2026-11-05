@@ -42,24 +42,28 @@ type permanentError struct{ err error }
 func (e *permanentError) Error() string { return e.err.Error() }
 func (e *permanentError) Unwrap() error { return e.err }
 
-// Provisioner declara el bucket de evidencia en S3.
+// Provisioner declara en S3 el bucket descripto por su BucketSpec. cfg aporta
+// la región y el timeout por operación, comunes a todos los buckets.
 type Provisioner struct {
 	api    API
+	spec   BucketSpec
 	cfg    config.StorageConfig
 	wait   WaitOptions
 	logger *slog.Logger
 }
 
-// NewProvisioner construye un Provisioner sobre el cliente dado.
-func NewProvisioner(api API, cfg config.StorageConfig, wait WaitOptions, logger *slog.Logger) *Provisioner {
-	return &Provisioner{api: api, cfg: cfg, wait: wait, logger: logger}
+// NewProvisioner construye un Provisioner del bucket spec sobre el cliente
+// dado.
+func NewProvisioner(api API, spec BucketSpec, cfg config.StorageConfig, wait WaitOptions, logger *slog.Logger) *Provisioner {
+	return &Provisioner{api: api, spec: spec, cfg: cfg, wait: wait, logger: logger}
 }
 
 // Apply espera a que S3 responda, crea el bucket solo si no existe y le
 // reaplica la configuración completa: Block Public Access, cifrado SSE-S3 y
 // lifecycle (reemplazo, no merge). Es idempotente: dos corridas seguidas
-// terminan en éxito sin efectos. No toca el versionado: un bucket nuevo
-// nace sin versionar y, si estuviera habilitado, lo detecta la verificación.
+// terminan en éxito sin efectos. Nunca toca el versionado ni Object Lock:
+// ambos se fijan al crear el bucket y, si un bucket existente no los tiene,
+// lo detecta la verificación; Core no lo borra ni lo recrea.
 func (p *Provisioner) Apply(ctx context.Context) error {
 	exists, err := p.awaitBucket(ctx)
 	if err != nil {
@@ -67,7 +71,7 @@ func (p *Provisioner) Apply(ctx context.Context) error {
 	}
 
 	if exists {
-		p.logger.Info("bucket de evidencia existente, se reaplica su configuración", "bucket", p.cfg.Bucket)
+		p.logger.Info("bucket "+p.spec.Label+" existente, se reaplica su configuración", "bucket", p.spec.Name)
 	} else if err := p.createBucket(ctx); err != nil {
 		return err
 	}
@@ -104,7 +108,7 @@ func (p *Provisioner) awaitBucket(ctx context.Context) (bool, error) {
 			return false, fmt.Errorf("s3 no respondió tras %s de espera: %w", p.wait.Timeout, err)
 		}
 
-		p.logger.Warn("s3 todavía no disponible, reintentando", "bucket", p.cfg.Bucket, "error", err)
+		p.logger.Warn("s3 todavía no disponible, reintentando", "bucket", p.spec.Name, "error", err)
 
 		select {
 		case <-ctx.Done():
@@ -117,7 +121,7 @@ func (p *Provisioner) awaitBucket(ctx context.Context) (bool, error) {
 
 func (p *Provisioner) headBucket(ctx context.Context) (bool, error) {
 	err := p.call(ctx, func(ctx context.Context) error {
-		_, err := p.api.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(p.cfg.Bucket)})
+		_, err := p.api.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(p.spec.Name)})
 		return err
 	})
 	if err == nil {
@@ -133,15 +137,20 @@ func (p *Provisioner) headBucket(ctx context.Context) (bool, error) {
 	case http.StatusNotFound:
 		return false, nil
 	case http.StatusForbidden:
-		return false, &permanentError{fmt.Errorf("acceso denegado al bucket %q: existe en otra cuenta o a las credenciales les falta s3:ListBucket: %w", p.cfg.Bucket, err)}
+		return false, &permanentError{fmt.Errorf("acceso denegado al bucket %q: existe en otra cuenta o a las credenciales les falta s3:ListBucket: %w", p.spec.Name, err)}
 	case http.StatusMovedPermanently:
-		return false, &permanentError{fmt.Errorf("el bucket %q está en otra región distinta de S3_REGION=%q: %w", p.cfg.Bucket, p.cfg.Region, err)}
+		return false, &permanentError{fmt.Errorf("el bucket %q está en otra región distinta de S3_REGION=%q: %w", p.spec.Name, p.cfg.Region, err)}
 	}
-	return false, fmt.Errorf("consultando el bucket %q: %w", p.cfg.Bucket, err)
+	return false, fmt.Errorf("consultando el bucket %q: %w", p.spec.Name, err)
 }
 
 func (p *Provisioner) createBucket(ctx context.Context) error {
-	in := &s3.CreateBucketInput{Bucket: aws.String(p.cfg.Bucket)}
+	in := &s3.CreateBucketInput{Bucket: aws.String(p.spec.Name)}
+	if p.spec.ObjectLock {
+		// Object Lock solo se habilita al crear el bucket y activa el
+		// versionado. No se fija retención por defecto.
+		in.ObjectLockEnabledForBucket = aws.Bool(true)
+	}
 	if p.cfg.Region != regionUSEast1 {
 		in.CreateBucketConfiguration = &types.CreateBucketConfiguration{
 			LocationConstraint: types.BucketLocationConstraint(p.cfg.Region),
@@ -155,67 +164,64 @@ func (p *Provisioner) createBucket(ctx context.Context) error {
 
 	var owned *types.BucketAlreadyOwnedByYou
 	if errors.As(err, &owned) {
-		p.logger.Info("el bucket de evidencia ya era propio", "bucket", p.cfg.Bucket)
+		p.logger.Info("el bucket "+p.spec.Label+" ya era propio", "bucket", p.spec.Name)
 		return nil
 	}
 	var taken *types.BucketAlreadyExists
 	if errors.As(err, &taken) {
 		return fmt.Errorf("el bucket %q ya existe y pertenece a otra cuenta: los nombres de bucket son globales, "+
-			"definir otro EVIDENCE_BUCKET con un sufijo único: %w", p.cfg.Bucket, err)
+			"definir otro %s con un sufijo único: %w", p.spec.Name, p.spec.EnvVar, err)
 	}
 	if err != nil {
-		return fmt.Errorf("creando el bucket %q: %w", p.cfg.Bucket, err)
+		return fmt.Errorf("creando el bucket %q: %w", p.spec.Name, err)
 	}
 
-	p.logger.Info("bucket de evidencia creado", "bucket", p.cfg.Bucket, "region", p.cfg.Region)
+	p.logger.Info("bucket "+p.spec.Label+" creado", "bucket", p.spec.Name, "region", p.cfg.Region, "object_lock", p.spec.ObjectLock)
 	return nil
 }
 
 func (p *Provisioner) putPublicAccessBlock(ctx context.Context) error {
 	err := p.call(ctx, func(ctx context.Context) error {
 		_, err := p.api.PutPublicAccessBlock(ctx, &s3.PutPublicAccessBlockInput{
-			Bucket:                         aws.String(p.cfg.Bucket),
+			Bucket:                         aws.String(p.spec.Name),
 			PublicAccessBlockConfiguration: PublicAccessBlockConfig(),
 		})
 		return err
 	})
 	if err != nil {
-		return fmt.Errorf("aplicando Block Public Access al bucket %q: %w", p.cfg.Bucket, err)
+		return fmt.Errorf("aplicando Block Public Access al bucket %q: %w", p.spec.Name, err)
 	}
-	p.logger.Info("block public access aplicado", "bucket", p.cfg.Bucket)
+	p.logger.Info("block public access aplicado", "bucket", p.spec.Name)
 	return nil
 }
 
 func (p *Provisioner) putEncryption(ctx context.Context) error {
 	err := p.call(ctx, func(ctx context.Context) error {
 		_, err := p.api.PutBucketEncryption(ctx, &s3.PutBucketEncryptionInput{
-			Bucket:                            aws.String(p.cfg.Bucket),
+			Bucket:                            aws.String(p.spec.Name),
 			ServerSideEncryptionConfiguration: EncryptionConfig(),
 		})
 		return err
 	})
 	if err != nil {
-		return fmt.Errorf("aplicando el cifrado SSE-S3 al bucket %q: %w", p.cfg.Bucket, err)
+		return fmt.Errorf("aplicando el cifrado SSE-S3 al bucket %q: %w", p.spec.Name, err)
 	}
-	p.logger.Info("cifrado por defecto aplicado", "bucket", p.cfg.Bucket)
+	p.logger.Info("cifrado por defecto aplicado", "bucket", p.spec.Name)
 	return nil
 }
 
 func (p *Provisioner) putLifecycle(ctx context.Context) error {
 	err := p.call(ctx, func(ctx context.Context) error {
 		_, err := p.api.PutBucketLifecycleConfiguration(ctx, &s3.PutBucketLifecycleConfigurationInput{
-			Bucket:                 aws.String(p.cfg.Bucket),
-			LifecycleConfiguration: &types.BucketLifecycleConfiguration{Rules: LifecycleRules(p.cfg)},
+			Bucket:                 aws.String(p.spec.Name),
+			LifecycleConfiguration: &types.BucketLifecycleConfiguration{Rules: p.spec.Rules},
 		})
 		return err
 	})
 	if err != nil {
-		return fmt.Errorf("aplicando el lifecycle al bucket %q: %w", p.cfg.Bucket, err)
+		return fmt.Errorf("aplicando el lifecycle al bucket %q: %w", p.spec.Name, err)
 	}
-	p.logger.Info("lifecycle aplicado",
-		"bucket", p.cfg.Bucket,
-		"pending_days", p.cfg.PendingDays,
-		"quarantine_days", p.cfg.QuarantineDays)
+	p.logger.Info("lifecycle aplicado", "bucket", p.spec.Name, "rules", len(p.spec.Rules))
 	return nil
 }
 

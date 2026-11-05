@@ -2,8 +2,9 @@
 
 Job de inicialización de infraestructura del ecosistema Vínculo Vial: declara,
 de forma idempotente, la topología de RabbitMQ (exchanges, colas, bindings,
-reintento y dead-letter) y el bucket de evidencia en AWS S3, los verifica y
-termina. No consume ni publica eventos de negocio, ni lee ni escribe objetos.
+reintento y dead-letter) y los buckets de evidencia y de Audit en AWS S3, los
+verifica y termina. No consume ni publica eventos de negocio, ni lee ni escribe
+objetos.
 
 ## Requisitos
 
@@ -15,14 +16,14 @@ termina. No consume ni publica eventos de negocio, ni lee ni escribe objetos.
 ```
 go run ./cmd/core
 go test ./...
-go test -tags aws ./internal/storage/...      # opt-in, bucket de desarrollo real
+go test -tags aws ./internal/storage/...      # opt-in, buckets de desarrollo reales
 CGO_ENABLED=0 go build -o core ./cmd/core
 docker compose up --build
 ```
 
-`go run ./cmd/core` y `docker compose up` requieren la configuración del
-bucket (ver la sección siguiente): sin `S3_REGION`, `EVIDENCE_BUCKET` y
-credenciales AWS, el job termina con error.
+`go run ./cmd/core` y `docker compose up` requieren la configuración de los
+buckets (ver las secciones siguientes): sin `S3_REGION`, `EVIDENCE_BUCKET`,
+`AUDIT_BUCKET` y credenciales AWS, el job termina con error.
 
 ## Colas de la plataforma
 
@@ -47,10 +48,15 @@ la routing key del evento. Todas las colas de trabajo se ligan a
 | `notification.alert-pending-delivered.q` | `alert.pending.delivered` | Alert → Notification | US-10 |
 | `alert.user-deleted.q` | `user.deleted` | Identity → Alert | US-11 |
 | `vehicle.user-deleted.q` | `user.deleted` | Identity → Vehicle | US-11 |
+| `audit.alert-recorded.q` | `audit.alert.recorded` | Alert → Audit | US-11 |
+| `audit.alert-delivered.q` | `audit.alert.delivered` | Alert → Audit | US-11 |
+| `audit.alert-discarded.q` | `audit.alert.discarded` | Alert → Audit | US-11 |
 
 `vvi.unrouted.q` recibe, vía `alternate-exchange`, lo que no matchea ninguna
 cola. `alert.rejected` y `user.deleted` tienen dos consumidores cada uno, cada
-uno con su propia cola: un fallo en uno no reentrega al otro.
+uno con su propia cola: un fallo en uno no reentrega al otro. Cada evento
+`audit.alert.*` tiene un único consumidor, Audit, y su routing key coincide
+con su `eventType`.
 
 Las colas de US-09, US-10 y US-11 son aditivas: en un broker con estado no hay `406`, solo se
 declaran las nuevas.
@@ -110,20 +116,22 @@ emulador local, y desarrollo usa un bucket real de AWS propio del entorno.
 
 ### Desarrollo local
 
-1. Copiar `.env.example` a `.env` y completar `EVIDENCE_BUCKET` (con sufijo
-   único), `S3_REGION`, `AWS_ACCESS_KEY_ID` y `AWS_SECRET_ACCESS_KEY`. El
-   `.env` está ignorado por git; las credenciales nunca van en el compose.
-2. `docker compose up --build`. Core crea el bucket si no existe y le
+1. Copiar `.env.example` a `.env` y completar `EVIDENCE_BUCKET` y
+   `AUDIT_BUCKET` (con sufijo único cada uno), `S3_REGION`,
+   `AWS_ACCESS_KEY_ID` y `AWS_SECRET_ACCESS_KEY`. El `.env` está ignorado por
+   git; las credenciales nunca van en el compose.
+2. `docker compose up --build`. Core crea los buckets si no existen y les
    reaplica la configuración.
 
-A diferencia del broker, el bucket persiste entre corridas:
+A diferencia del broker, los buckets persisten entre corridas:
 `docker compose down -v` reconstruye la topología de RabbitMQ pero no toca
 S3, y `cmd/reset` tampoco.
 
 ### Políticas IAM
 
 Un usuario o rol IAM por servicio, con el mínimo de permisos. En los tres
-ejemplos, reemplazar `EVIDENCE_BUCKET` por el nombre real del bucket.
+ejemplos, reemplazar `EVIDENCE_BUCKET` por el nombre real del bucket. Los
+permisos de Core sobre el bucket de Audit están en su propia sección.
 
 **Core** — solo configura el bucket; sin acceso a objetos. `s3:ListBucket` lo
 exige `HeadBucket`:
@@ -221,16 +229,111 @@ motivo:
 ### Prueba de integración contra AWS (opt-in)
 
 `internal/storage` incluye una prueba con el build tag `aws` que corre el
-aprovisionador dos veces seguidas contra el bucket real y verifica la
-configuración tras cada corrida. No forma parte de `go test ./...`:
+aprovisionador dos veces seguidas contra cada bucket real (evidencia y Audit)
+y verifica la configuración tras cada corrida. No forma parte de
+`go test ./...`:
 
 ```
-S3_REGION=us-east-1 EVIDENCE_BUCKET=vinculo-vial-evidence-dev-<sufijo> \
+S3_REGION=us-east-1 \
+  EVIDENCE_BUCKET=vinculo-vial-evidence-dev-<sufijo> \
+  AUDIT_BUCKET=vinculo-vial-audit-dev-<sufijo> \
   go test -tags aws ./internal/storage/...
 ```
 
-Requiere credenciales en la cadena del SDK y un bucket propio del entorno:
-modifica la configuración del bucket que se le indique.
+Requiere credenciales en la cadena del SDK y buckets propios del entorno:
+modifica la configuración de los buckets que se le indiquen.
+
+## Bucket de Audit (AWS S3)
+
+Desde US-11, Core declara también el bucket donde Audit conserva, bloqueadas,
+las copias de las fotos redactadas y el manifiesto de cada alerta entregada
+(`records/{alert_id}/...`). Core sigue sin leer ni escribir objetos: solo
+configura el bucket. Lo declara con el mismo aprovisionador y el mismo
+verificador que el de evidencia, a partir de una segunda especificación
+(`storage.AuditSpec`), y después del de evidencia en cada corrida.
+
+| Propiedad | Valor |
+|---|---|
+| Acceso | Privado: Block Public Access con los cuatro indicadores en `true` |
+| Cifrado | SSE-S3 (`AES256`) por defecto |
+| Versionado y Object Lock | Se crean habilitados (`ObjectLockEnabledForBucket`); Object Lock activa el versionado |
+| Retención por defecto | Ninguna: la fija Audit en cada objeto (`AUDIT_OBJECT_LOCK_MODE` y `RetainUntilDate`, variables de Audit y no de Core) |
+| Lifecycle | Una regla sobre todo el bucket: `NoncurrentVersionExpiration` a 1 día y `ExpiredObjectDeleteMarker` |
+
+El lifecycle limpia lo que Audit borra: como el bucket está versionado, cada
+borrado deja versiones no vigentes y delete markers. S3 respeta la retención
+vigente de cada versión, así que la regla nunca adelanta un borrado. Se
+aplica completo en cada corrida, igual que el de evidencia.
+
+**Object Lock solo se puede habilitar al crear el bucket.** Si `AUDIT_BUCKET`
+ya existe sin Object Lock, Core no lo corrige: reaplica la configuración y la
+verificación falla con el mensaje "el bucket existe sin Object Lock", y el job
+termina con código distinto de 0. Core nunca borra ni recrea un bucket; la
+salida es una decisión manual (vaciarlo y eliminarlo, o definir otro
+`AUDIT_BUCKET`).
+
+La verificación comprueba, además de Block Public Access, cifrado y
+lifecycle:
+
+- **Object Lock habilitado y sin retención por defecto.** Una retención por
+  defecto configurada a mano también falla.
+- **Versionado habilitado.** En el bucket de evidencia sigue siendo al
+  revés: debe estar sin versionar.
+
+### Configuración
+
+| Variable | Valor por defecto | Descripción |
+|---|---|---|
+| `AUDIT_BUCKET` | obligatoria | Nombre del bucket de Audit. Global en AWS: lleva un sufijo único, uno por entorno (`vinculo-vial-audit-<entorno>-<sufijo>`). Distinto de `EVIDENCE_BUCKET`; debe coincidir con el `AUDIT_BUCKET` de Audit |
+
+`S3_REGION` y `S3_TIMEOUT_MS` son los mismos que los del bucket de evidencia.
+
+### Permisos IAM de Core
+
+Para crear el bucket con Object Lock, AWS exige además de `s3:CreateBucket`
+los permisos `s3:PutBucketVersioning` y `s3:PutBucketObjectLockConfiguration`.
+Core no los usa en corridas posteriores, pero sin ellos el primer
+`CreateBucket` falla. Reemplazar `AUDIT_BUCKET` por el nombre real:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CoreCreateAuditBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:CreateBucket",
+        "s3:PutBucketVersioning",
+        "s3:PutBucketObjectLockConfiguration"
+      ],
+      "Resource": "arn:aws:s3:::AUDIT_BUCKET"
+    },
+    {
+      "Sid": "CoreConfigureAuditBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket",
+        "s3:PutBucketPublicAccessBlock",
+        "s3:GetBucketPublicAccessBlock",
+        "s3:PutEncryptionConfiguration",
+        "s3:GetEncryptionConfiguration",
+        "s3:PutLifecycleConfiguration",
+        "s3:GetLifecycleConfiguration",
+        "s3:GetBucketVersioning",
+        "s3:GetBucketObjectLockConfiguration"
+      ],
+      "Resource": "arn:aws:s3:::AUDIT_BUCKET"
+    }
+  ]
+}
+```
+
+Sin acceso a objetos: el rol de Core no puede leer, escribir ni borrar nada
+del bucket. Los permisos de Audit sobre los objetos (incluidos
+`s3:PutObjectRetention` y `s3:PutObjectLegalHold`) son de su propio repo.
+
+## Herramientas de desarrollo
 
 ### Reset de topología (solo desarrollo local)
 
@@ -247,8 +350,9 @@ No forma parte del arranque del sistema ni del `docker-compose.yml`: es una
 herramienta manual, pensada para forzar una redeclaración de topología
 durante el desarrollo sin reiniciar el contenedor del broker. Borra todas las
 colas y exchanges de la plataforma, incluidos los flujos de
-US-08, US-09, US-10 y US-11. Solo toca el broker: no se conecta a S3 ni modifica el bucket de
-evidencia, que persiste entre corridas.
+US-08, US-09, US-10 y US-11 (baja de cuenta y Audit). Solo toca el broker: no se
+conecta a S3 ni modifica los buckets de evidencia y de Audit, que persisten
+entre corridas.
 
 ### Limpieza de exchange huérfano (legacy)
 
@@ -284,6 +388,10 @@ disponible en la validación habitual. Cubre:
   `vehicle.user-deleted.q`. Con esas dos y dos colas de prueba bindeadas al
   mismo evento, un `nack` sin requeue en una de las de prueba vuelve solo a
   esa cola.
+- **`audit.alert.*` (US-11):** `audit.alert.recorded`, `.delivered` y
+  `.discarded` llegan cada uno únicamente a `audit.alert-recorded.q`,
+  `audit.alert-delivered.q` y `audit.alert-discarded.q`, respectivamente: las
+  otras dos colas de Audit no reciben copia.
 
 Las colas de prueba (`smoke-probe-*`) son de la propia prueba: se declaran con
 la misma función de flujo que usa la topología, con un `.retry` de 1 s para no
@@ -299,7 +407,8 @@ de publicar verifica que las colas de trabajo reales que usa no tengan
 consumidores activos y falla si los hay: deben estar detenidos los consumidores
 de `notification.alert-created.q`, `notification.sessions-revoked.q`,
 `identity.alert-rejected.q`, `alert.ia-evidence-validated.q`,
-`alert.user-deleted.q` y `vehicle.user-deleted.q` (por ejemplo,
+`alert.user-deleted.q`, `vehicle.user-deleted.q`, `audit.alert-recorded.q`,
+`audit.alert-delivered.q` y `audit.alert-discarded.q` (por ejemplo,
 `docker stop vinculo-vial-notification`), porque competirían por el mismo
 mensaje.
 

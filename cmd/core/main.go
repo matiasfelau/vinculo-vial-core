@@ -1,6 +1,6 @@
 // Command core es el job de inicialización de infraestructura: declara la
-// topología estándar de RabbitMQ y el bucket de evidencia de S3 de forma
-// idempotente, los verifica y termina. No consume ni publica eventos de
+// topología estándar de RabbitMQ y los buckets de evidencia y de Audit de S3
+// de forma idempotente, los verifica y termina. No consume ni publica eventos de
 // negocio, no lee ni escribe objetos, y no expone puertos ni HTTP: su salud
 // es su código de salida.
 package main
@@ -43,7 +43,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger.Info("topología y bucket de evidencia declarados y verificados correctamente")
+	logger.Info("topología y buckets de evidencia y de Audit declarados y verificados correctamente")
 }
 
 func run(logger *slog.Logger) error {
@@ -81,12 +81,13 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	return provisionBucket(storageCfg, logger)
+	return provisionBuckets(storageCfg, logger)
 }
 
-// provisionBucket declara el bucket de evidencia en S3 y verifica que su
-// configuración coincida con lo declarado. Cualquier fallo es fatal.
-func provisionBucket(cfg config.StorageConfig, logger *slog.Logger) error {
+// provisionBuckets declara en S3 el bucket de evidencia y el de Audit y
+// verifica que la configuración de cada uno coincida con lo declarado.
+// Cualquier fallo es fatal.
+func provisionBuckets(cfg config.StorageConfig, logger *slog.Logger) error {
 	ctx, cancel := context.WithTimeout(context.Background(), s3StageTimeout)
 	defer cancel()
 
@@ -96,12 +97,14 @@ func provisionBucket(cfg config.StorageConfig, logger *slog.Logger) error {
 	}
 
 	wait := storage.WaitOptions{Timeout: s3WaitTimeout, InitialBackoff: s3InitialBackoff, MaxBackoff: s3MaxBackoff}
-	if err := storage.NewProvisioner(client, cfg, wait, logger).Apply(ctx); err != nil {
-		return fmt.Errorf("declarando el bucket de evidencia: %w", err)
-	}
+	for _, spec := range []storage.BucketSpec{storage.EvidenceSpec(cfg), storage.AuditSpec(cfg)} {
+		if err := storage.NewProvisioner(client, spec, cfg, wait, logger).Apply(ctx); err != nil {
+			return fmt.Errorf("declarando el bucket %s: %w", spec.Label, err)
+		}
 
-	if err := verify.NewBucketVerifier(client, cfg).Verify(ctx); err != nil {
-		return fmt.Errorf("verificando el bucket de evidencia: %w", err)
+		if err := verify.NewBucketVerifier(client, spec, cfg).Verify(ctx); err != nil {
+			return fmt.Errorf("verificando el bucket %s: %w", spec.Label, err)
+		}
 	}
 	return nil
 }
