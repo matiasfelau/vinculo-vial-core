@@ -30,6 +30,9 @@ func contractFlows() map[string]string {
 		"notification.alert-pending-delivered.q": "alert.pending.delivered",
 		"alert.user-deleted.q":                   "user.deleted",
 		"vehicle.user-deleted.q":                 "user.deleted",
+		"audit.alert-recorded.q":                 "audit.alert.recorded",
+		"audit.alert-delivered.q":                "audit.alert.delivered",
+		"audit.alert-discarded.q":                "audit.alert.discarded",
 	}
 }
 
@@ -93,8 +96,12 @@ func TestTopicMatches(t *testing.T) {
 	}
 }
 
-func TestPlatform_DeclaraExactamenteLosCatorceFlujosDelContrato(t *testing.T) {
+func TestPlatform_DeclaraExactamenteLosDiecisieteFlujosDelContrato(t *testing.T) {
 	tp := Platform(testConfig())
+
+	if got := len(contractFlows()); got != 17 {
+		t.Fatalf("el contrato enumera %d flujos, se esperaban 17", got)
+	}
 
 	want := []string{unroutedQueueName}
 	for work := range contractFlows() {
@@ -114,6 +121,57 @@ func TestPlatform_DeclaraExactamenteLosCatorceFlujosDelContrato(t *testing.T) {
 
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("colas declaradas = %v, se esperaba %v", got, want)
+	}
+}
+
+// TestPlatform_ArgumentosDeCadaFlujoDelContrato verifica, para los 17 flujos
+// (incluidos los tres de Audit), los argumentos inmutables de la cola de
+// trabajo, de su .retry y de su .dlq. Cambiarlos exige borrar y recrear la
+// cola, así que cualquier desvío debe romper acá y no con un 406 en el broker.
+func TestPlatform_ArgumentosDeCadaFlujoDelContrato(t *testing.T) {
+	cfg := testConfig()
+	tp := Platform(cfg)
+
+	queues := map[string]Queue{}
+	for _, q := range tp.Queues {
+		queues[q.Name] = q
+	}
+
+	for _, auditWork := range []string{"audit.alert-recorded.q", "audit.alert-delivered.q", "audit.alert-discarded.q"} {
+		if _, ok := contractFlows()[auditWork]; !ok {
+			t.Fatalf("el flujo %q de Audit no está en el contrato del test", auditWork)
+		}
+	}
+
+	for work := range contractFlows() {
+		base := strings.TrimSuffix(work, ".q")
+		w, retry, dlq := queues[work], queues[base+".retry"], queues[base+".dlq"]
+
+		wantWork := map[string]any{
+			"x-dead-letter-exchange":    cfg.RetryExchange,
+			"x-dead-letter-routing-key": work,
+		}
+		if !reflect.DeepEqual(w.Arguments, wantWork) {
+			t.Errorf("%s: argumentos = %v, se esperaba %v", work, w.Arguments, wantWork)
+		}
+
+		wantRetry := map[string]any{
+			"x-message-ttl":             cfg.RetryTTLMs,
+			"x-dead-letter-exchange":    DefaultExchange,
+			"x-dead-letter-routing-key": work,
+		}
+		if !reflect.DeepEqual(retry.Arguments, wantRetry) {
+			t.Errorf("%s: argumentos = %v, se esperaba %v", retry.Name, retry.Arguments, wantRetry)
+		}
+
+		if len(dlq.Arguments) != 0 {
+			t.Errorf("%s: la DLQ no lleva argumentos, tiene %v", dlq.Name, dlq.Arguments)
+		}
+		for _, q := range []Queue{w, retry, dlq} {
+			if !q.Durable {
+				t.Errorf("la cola %q no es durable", q.Name)
+			}
+		}
 	}
 }
 
@@ -233,7 +291,8 @@ func TestPlatform_CadaEventoDelContratoLlegaSoloASusConsumidores(t *testing.T) {
 
 	// alert.rejected tiene dos consumidores contratados: Identity (penaliza) y
 	// Notification (avisa al emisor), cada uno con su propia cola de trabajo.
-	// user.deleted también tiene dos: Alert y Vehicle.
+	// user.deleted también tiene dos: Alert y Vehicle. Cada evento audit.alert.*
+	// tiene un único consumidor: Audit.
 	concreteKeys := map[string][]string{
 		"alert.created":                {"notification.alert-created.q"},
 		"user.sessions.revoked":        {"notification.sessions-revoked.q"},
@@ -249,6 +308,9 @@ func TestPlatform_CadaEventoDelContratoLlegaSoloASusConsumidores(t *testing.T) {
 		"vehicle.pending.claimed":      {"alert.vehicle-pending-claimed.q"},
 		"alert.pending.delivered":      {"notification.alert-pending-delivered.q"},
 		"user.deleted":                 {"alert.user-deleted.q", "vehicle.user-deleted.q"},
+		"audit.alert.recorded":         {"audit.alert-recorded.q"},
+		"audit.alert.delivered":        {"audit.alert-delivered.q"},
+		"audit.alert.discarded":        {"audit.alert-discarded.q"},
 	}
 
 	for key, want := range concreteKeys {

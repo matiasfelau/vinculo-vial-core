@@ -20,6 +20,7 @@ func bucketTestConfig() config.StorageConfig {
 	return config.StorageConfig{
 		Region:         "us-east-1",
 		Bucket:         "vinculo-vial-evidence-test",
+		AuditBucket:    "vinculo-vial-audit-test",
 		Timeout:        time.Second,
 		PendingDays:    2,
 		QuarantineDays: 15,
@@ -38,6 +39,8 @@ type fakeBucket struct {
 	versErr    error
 	lifecycle  *s3.GetBucketLifecycleConfigurationOutput
 	lifeErr    error
+	lock       *s3.GetObjectLockConfigurationOutput
+	lockErr    error
 
 	calls []string
 }
@@ -79,14 +82,24 @@ func (f *fakeBucket) GetBucketLifecycleConfiguration(context.Context, *s3.GetBuc
 	return f.lifecycle, f.lifeErr
 }
 
+func (f *fakeBucket) GetObjectLockConfiguration(context.Context, *s3.GetObjectLockConfigurationInput, ...func(*s3.Options)) (*s3.GetObjectLockConfigurationOutput, error) {
+	f.calls = append(f.calls, "GetObjectLockConfiguration")
+	return f.lock, f.lockErr
+}
+
 func apiError(code string) error {
 	return &smithy.GenericAPIError{Code: code, Message: "no configurado"}
 }
 
 func mustFailWith(t *testing.T, f *fakeBucket, cfg config.StorageConfig, wants ...string) {
 	t.Helper()
+	mustFailWithSpec(t, f, storage.EvidenceSpec(cfg), cfg, wants...)
+}
 
-	err := NewBucketVerifier(f, cfg).Verify(context.Background())
+func mustFailWithSpec(t *testing.T, f *fakeBucket, spec storage.BucketSpec, cfg config.StorageConfig, wants ...string) {
+	t.Helper()
+
+	err := NewBucketVerifier(f, spec, cfg).Verify(context.Background())
 	if err == nil {
 		t.Fatalf("se esperaba un error que mencione %q", wants)
 	}
@@ -100,7 +113,7 @@ func mustFailWith(t *testing.T, f *fakeBucket, cfg config.StorageConfig, wants .
 func TestBucketVerify_ConfiguracionCorrecta(t *testing.T) {
 	cfg := bucketTestConfig()
 
-	if err := NewBucketVerifier(validBucket(cfg), cfg).Verify(context.Background()); err != nil {
+	if err := NewBucketVerifier(validBucket(cfg), storage.EvidenceSpec(cfg), cfg).Verify(context.Background()); err != nil {
 		t.Fatalf("error inesperado: %v", err)
 	}
 }
@@ -112,7 +125,7 @@ func TestBucketVerify_AceptaVersionadoNuncaActivadoOSuspendido(t *testing.T) {
 		f := validBucket(cfg)
 		f.versioning = &s3.GetBucketVersioningOutput{Status: status}
 
-		if err := NewBucketVerifier(f, cfg).Verify(context.Background()); err != nil {
+		if err := NewBucketVerifier(f, storage.EvidenceSpec(cfg), cfg).Verify(context.Background()); err != nil {
 			t.Errorf("versionado %q: error inesperado: %v", status, err)
 		}
 	}
@@ -162,7 +175,7 @@ func TestBucketVerify_LifecycleUsaLosDiasDelEntorno(t *testing.T) {
 	cfg.PendingDays = 3
 	cfg.QuarantineDays = 20
 
-	if err := NewBucketVerifier(validBucket(cfg), cfg).Verify(context.Background()); err != nil {
+	if err := NewBucketVerifier(validBucket(cfg), storage.EvidenceSpec(cfg), cfg).Verify(context.Background()); err != nil {
 		t.Fatalf("error inesperado con los días del entorno: %v", err)
 	}
 }
@@ -215,7 +228,7 @@ func TestBucketVerify_LifecycleNoDependeDelOrdenDeLasReglas(t *testing.T) {
 	rules := storage.LifecycleRules(cfg)
 	f.lifecycle = &s3.GetBucketLifecycleConfigurationOutput{Rules: []types.LifecycleRule{rules[1], rules[0]}}
 
-	if err := NewBucketVerifier(f, cfg).Verify(context.Background()); err != nil {
+	if err := NewBucketVerifier(f, storage.EvidenceSpec(cfg), cfg).Verify(context.Background()); err != nil {
 		t.Fatalf("el orden de las reglas no debe importar: %v", err)
 	}
 }
@@ -278,7 +291,7 @@ func TestBucketVerify_ErrorDeConsultaEsFailClosed(t *testing.T) {
 			f := validBucket(cfg)
 			breakIt(f)
 
-			err := NewBucketVerifier(f, cfg).Verify(context.Background())
+			err := NewBucketVerifier(f, storage.EvidenceSpec(cfg), cfg).Verify(context.Background())
 			if !errors.Is(err, boom) {
 				t.Fatalf("error = %v, se esperaba que envolviera la falla de consulta", err)
 			}

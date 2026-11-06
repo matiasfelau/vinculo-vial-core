@@ -433,3 +433,38 @@ func TestRetry_UserDeletedReentregaSoloALaColaQueFallo(t *testing.T) {
 
 	mustAck(t, retried, probeAWork)
 }
+
+// auditQueues asocia cada routing key de Audit con su única cola de trabajo.
+var auditQueues = map[string]string{
+	topology.AuditAlertRecordedRoutingKey:  "audit.alert-recorded.q",
+	topology.AuditAlertDeliveredRoutingKey: "audit.alert-delivered.q",
+	topology.AuditAlertDiscardedRoutingKey: "audit.alert-discarded.q",
+}
+
+// TestRouting_AuditAlertLlegaSoloASuCola publica cada routing key audit.alert.*
+// en el exchange principal y confirma que la recibe únicamente su cola: las
+// otras dos de Audit no deben recibir copia.
+func TestRouting_AuditAlertLlegaSoloASuCola(t *testing.T) {
+	b := connectAndDeclare(t)
+
+	deliveries := map[string]<-chan amqplib.Delivery{}
+	for _, queue := range auditQueues {
+		b.requireNoConsumers(t, queue)
+		deliveries[queue] = b.consume(t, queue)
+	}
+
+	for routingKey, want := range auditQueues {
+		t.Run(routingKey, func(t *testing.T) {
+			marker := newMarker(routingKey)
+			b.publish(t, b.cfg.MainExchange, routingKey, marker)
+
+			mustAck(t, mustReceive(t, deliveries[want], want, marker, deliveryTimeout), want)
+
+			for queue, ch := range deliveries {
+				if queue != want {
+					mustNotReceive(t, ch, queue)
+				}
+			}
+		})
+	}
+}

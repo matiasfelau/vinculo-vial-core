@@ -54,4 +54,19 @@ const (
 	// vinculo-vial-identity al dar de baja la cuenta de un usuario. Tiene dos
 	// consumidores (Alert y Vehicle), cada uno con su propia cola de trabajo.
 	UserDeletedRoutingKey = "user.deleted"
+
+	// AuditAlertRecordedRoutingKey es la routing key del evento publicado por
+	// vinculo-vial-alert, por outbox y en la TX de creación, con el registro
+	// de auditoría de cada alerta. Su único consumidor es vinculo-vial-audit.
+	AuditAlertRecordedRoutingKey = "audit.alert.recorded"
+
+	// AuditAlertDeliveredRoutingKey es la routing key del evento publicado por
+	// vinculo-vial-alert la primera vez que una alerta queda activa con al
+	// menos un destinatario. Su único consumidor es vinculo-vial-audit.
+	AuditAlertDeliveredRoutingKey = "audit.alert.delivered"
+
+	// AuditAlertDiscardedRoutingKey es la routing key del evento publicado por
+	// vinculo-vial-alert cuando una alerta ya no puede llegar a nadie. Su
+	// único consumidor es vinculo-vial-audit.
+	AuditAlertDiscardedRoutingKey = "audit.alert.discarded"
 )
