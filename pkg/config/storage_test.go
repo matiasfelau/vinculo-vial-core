@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -9,6 +10,7 @@ func setStorageEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("S3_REGION", "us-east-1")
 	t.Setenv("EVIDENCE_BUCKET", "vinculo-vial-evidence-dev-abc123")
+	t.Setenv("AUDIT_BUCKET", "vinculo-vial-audit-dev-abc123")
 	t.Setenv("S3_TIMEOUT_MS", "")
 	t.Setenv("EVIDENCE_PENDING_DAYS", "")
 	t.Setenv("EVIDENCE_QUARANTINE_DAYS", "")
@@ -24,6 +26,9 @@ func TestLoadStorage_ValoresPorDefectoDelContrato(t *testing.T) {
 
 	if cfg.Region != "us-east-1" || cfg.Bucket != "vinculo-vial-evidence-dev-abc123" {
 		t.Errorf("región/bucket = %q/%q", cfg.Region, cfg.Bucket)
+	}
+	if cfg.AuditBucket != "vinculo-vial-audit-dev-abc123" {
+		t.Errorf("AuditBucket = %q", cfg.AuditBucket)
 	}
 	if cfg.Timeout != 5*time.Second {
 		t.Errorf("Timeout = %s, se esperaba 5s", cfg.Timeout)
@@ -70,16 +75,44 @@ func TestLoadStorage_BucketObligatorio(t *testing.T) {
 	}
 }
 
-func TestLoadStorage_NombreDeBucketInvalido(t *testing.T) {
-	for _, name := range []string{"ab", "Vinculo-Evidence", "-evidence", "evidence-", "evidence_bucket", "evidence bucket"} {
-		t.Run(name, func(t *testing.T) {
-			setStorageEnv(t)
-			t.Setenv("EVIDENCE_BUCKET", name)
+func TestLoadStorage_BucketDeAuditObligatorio(t *testing.T) {
+	setStorageEnv(t)
+	t.Setenv("AUDIT_BUCKET", "")
 
-			if _, err := LoadStorage(); err == nil {
-				t.Fatalf("se esperaba error por el nombre de bucket %q", name)
-			}
-		})
+	_, err := LoadStorage()
+	if err == nil {
+		t.Fatal("se esperaba error al no definir AUDIT_BUCKET")
+	}
+	if !strings.Contains(err.Error(), "AUDIT_BUCKET") {
+		t.Errorf("el error %q debería mencionar AUDIT_BUCKET", err.Error())
+	}
+}
+
+func TestLoadStorage_NombreDeBucketInvalido(t *testing.T) {
+	for _, envVar := range []string{"EVIDENCE_BUCKET", "AUDIT_BUCKET"} {
+		for _, name := range []string{"ab", "Vinculo-Evidence", "-evidence", "evidence-", "evidence_bucket", "evidence bucket"} {
+			t.Run(envVar+"="+name, func(t *testing.T) {
+				setStorageEnv(t)
+				t.Setenv(envVar, name)
+
+				_, err := LoadStorage()
+				if err == nil {
+					t.Fatalf("se esperaba error por %s=%q", envVar, name)
+				}
+				if !strings.Contains(err.Error(), envVar) {
+					t.Errorf("el error %q debería mencionar %s", err.Error(), envVar)
+				}
+			})
+		}
+	}
+}
+
+func TestLoadStorage_LosDosBucketsDebenSerDistintos(t *testing.T) {
+	setStorageEnv(t)
+	t.Setenv("AUDIT_BUCKET", "vinculo-vial-evidence-dev-abc123")
+
+	if _, err := LoadStorage(); err == nil {
+		t.Fatal("se esperaba error: AUDIT_BUCKET igual a EVIDENCE_BUCKET")
 	}
 }
 

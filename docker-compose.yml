@@ -63,6 +63,8 @@ services:
       EVIDENCE_BUCKET: ${EVIDENCE_BUCKET:?definir EVIDENCE_BUCKET en .env}
       EVIDENCE_PENDING_DAYS: ${EVIDENCE_PENDING_DAYS:-2}
       EVIDENCE_QUARANTINE_DAYS: ${EVIDENCE_QUARANTINE_DAYS:-15}
+      # Bucket de Audit (US-11): con Object Lock, también en AWS S3.
+      AUDIT_BUCKET: ${AUDIT_BUCKET:?definir AUDIT_BUCKET en .env}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?definir AWS_ACCESS_KEY_ID en .env}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?definir AWS_SECRET_ACCESS_KEY en .env}
     networks:
@@ -81,5 +83,5 @@ networks:
 # persistentes por diseño, para que cada ciclo down/up ejercite la
 # declaración de topología contra un estado vacío. La convención
 # vinculo-vial-[nombre]-data no tiene ningún volumen al que aplicarse
-# todavía. El bucket de evidencia vive en AWS S3, no en este compose, y
-# persiste entre corridas.
+# todavía. Los buckets de evidencia y de Audit viven en AWS S3, no en este
+# compose, y persisten entre corridas.

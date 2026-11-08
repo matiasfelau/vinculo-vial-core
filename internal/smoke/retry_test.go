@@ -27,6 +27,9 @@ const (
 	probeA = "smoke-probe-a.alert-rejected"
 	probeB = "smoke-probe-b.alert-rejected"
 
+	userDeletedProbeA = "smoke-probe-a.user-deleted"
+	userDeletedProbeB = "smoke-probe-b.user-deleted"
+
 	// quietPeriod es cuánto se espera para dar por confirmado que una cola
 	// NO recibe un mensaje.
 	quietPeriod = 1500 * time.Millisecond
@@ -105,19 +108,19 @@ func (b broker) remove(t *testing.T, topo topology.Topology) {
 	}
 }
 
-// declareProbes declara dos flujos de consumidores de prueba (W, W.retry y
-// W.dlq cada uno, construidos por la misma función de flujo que usa
-// Platform) bindeados al mismo evento alert.rejected, y los borra al
+// declareProbes declara un flujo de consumidor de prueba por cada base dada
+// (W, W.retry y W.dlq cada uno, construidos por la misma función de flujo que
+// usa Platform) bindeados al mismo evento routingKey, y los borra al
 // terminar. Borra antes cualquier resto de una corrida abortada.
-func (b broker) declareProbes(t *testing.T) {
+func (b broker) declareProbes(t *testing.T, routingKey string, bases ...string) {
 	t.Helper()
 
 	probeCfg := b.cfg
 	probeCfg.RetryTTLMs = probeRetryTTLMs
 
-	probes := []topology.Topology{
-		topology.ConsumerFlow(probeA, topology.AlertRejectedRoutingKey, probeCfg),
-		topology.ConsumerFlow(probeB, topology.AlertRejectedRoutingKey, probeCfg),
+	probes := make([]topology.Topology, 0, len(bases))
+	for _, base := range bases {
+		probes = append(probes, topology.ConsumerFlow(base, routingKey, probeCfg))
 	}
 
 	for _, p := range probes {
@@ -259,7 +262,7 @@ func TestRetry_ReentregaSoloALaColaQueHizoNack(t *testing.T) {
 		t.Fatalf("la topología no liga ninguna cola a %q en %q", topology.AlertRejectedRoutingKey, b.cfg.MainExchange)
 	}
 	b.requireNoConsumers(t, identityQueue)
-	b.declareProbes(t)
+	b.declareProbes(t, topology.AlertRejectedRoutingKey, probeA, probeB)
 
 	probeAWork, probeBWork := probeA+".q", probeB+".q"
 	deliveriesA := b.consume(t, probeAWork)
@@ -305,7 +308,7 @@ func TestRetry_ReentregaSoloALaColaQueHizoNack(t *testing.T) {
 // ni en la cola de trabajo.
 func TestDLQ_RutaPorNombreDeColaDeTrabajo(t *testing.T) {
 	b := connectAndDeclare(t)
-	b.declareProbes(t)
+	b.declareProbes(t, topology.AlertRejectedRoutingKey, probeA, probeB)
 
 	probeAWork := probeA + ".q"
 	deliveriesA := b.consume(t, probeA+".dlq")
@@ -347,6 +350,121 @@ func TestRouting_ColaDeIARecibeGreenYellowYRed(t *testing.T) {
 			b.publish(t, b.cfg.MainExchange, routingKey, marker)
 
 			mustAck(t, mustReceive(t, deliveries, queue, marker, deliveryTimeout), queue)
+		})
+	}
+}
+
+const (
+	alertUserDeletedQueue   = "alert.user-deleted.q"
+	vehicleUserDeletedQueue = "vehicle.user-deleted.q"
+)
+
+// TestRouting_UserDeletedLlegaALasDosColas publica user.deleted en el
+// exchange principal y confirma que lo reciben las colas de trabajo de Alert
+// y de Vehicle, cada una con su propia copia.
+func TestRouting_UserDeletedLlegaALasDosColas(t *testing.T) {
+	b := connectAndDeclare(t)
+
+	queues := []string{alertUserDeletedQueue, vehicleUserDeletedQueue}
+	deliveries := map[string]<-chan amqplib.Delivery{}
+	for _, queue := range queues {
+		b.requireNoConsumers(t, queue)
+		deliveries[queue] = b.consume(t, queue)
+	}
+
+	marker := newMarker("user-deleted")
+	b.publish(t, b.cfg.MainExchange, topology.UserDeletedRoutingKey, marker)
+
+	for _, queue := range queues {
+		mustAck(t, mustReceive(t, deliveries[queue], queue, marker, deliveryTimeout), queue)
+	}
+}
+
+// TestRetry_UserDeletedReentregaSoloALaColaQueFallo publica user.deleted con
+// cuatro colas bindeadas (las reales de Alert y Vehicle y dos de prueba). Un
+// nack sin requeue en una de las de prueba debe volver únicamente a esa cola,
+// pasando por su .retry: las demás, que ya hicieron ack, no reciben una
+// segunda copia.
+func TestRetry_UserDeletedReentregaSoloALaColaQueFallo(t *testing.T) {
+	b := connectAndDeclare(t)
+
+	b.requireNoConsumers(t, alertUserDeletedQueue)
+	b.requireNoConsumers(t, vehicleUserDeletedQueue)
+	b.declareProbes(t, topology.UserDeletedRoutingKey, userDeletedProbeA, userDeletedProbeB)
+
+	probeAWork, probeBWork := userDeletedProbeA+".q", userDeletedProbeB+".q"
+	deliveriesA := b.consume(t, probeAWork)
+	deliveriesB := b.consume(t, probeBWork)
+	deliveriesAlert := b.consume(t, alertUserDeletedQueue)
+	deliveriesVehicle := b.consume(t, vehicleUserDeletedQueue)
+
+	marker := newMarker("user-deleted-retry")
+	b.publish(t, b.cfg.MainExchange, topology.UserDeletedRoutingKey, marker)
+
+	msgA := mustReceive(t, deliveriesA, probeAWork, marker, deliveryTimeout)
+	msgB := mustReceive(t, deliveriesB, probeBWork, marker, deliveryTimeout)
+	msgAlert := mustReceive(t, deliveriesAlert, alertUserDeletedQueue, marker, deliveryTimeout)
+	msgVehicle := mustReceive(t, deliveriesVehicle, vehicleUserDeletedQueue, marker, deliveryTimeout)
+
+	mustAck(t, msgB, probeBWork)
+	mustAck(t, msgAlert, alertUserDeletedQueue)
+	mustAck(t, msgVehicle, vehicleUserDeletedQueue)
+	if err := msgA.Nack(false, false); err != nil {
+		t.Fatalf("nack del mensaje de %q: %v", probeAWork, err)
+	}
+
+	retried := mustReceive(t, deliveriesA, probeAWork, marker, probeRetryTTLMs*time.Millisecond+deliveryTimeout)
+
+	if n := deathCount(retried.Headers, probeAWork, "rejected"); n != 1 {
+		t.Errorf("x-death registra %d rechazos en %q, se esperaba 1", n, probeAWork)
+	}
+	if n := deathCount(retried.Headers, userDeletedProbeA+".retry", "expired"); n != 1 {
+		t.Errorf("x-death registra %d vencimientos en %q, se esperaba 1: el mensaje no pasó por el retry", n, userDeletedProbeA+".retry")
+	}
+
+	mustNotReceive(t, deliveriesB, probeBWork)
+	mustNotReceive(t, deliveriesAlert, alertUserDeletedQueue)
+	mustNotReceive(t, deliveriesVehicle, vehicleUserDeletedQueue)
+	for _, queue := range []string{probeBWork, alertUserDeletedQueue, vehicleUserDeletedQueue} {
+		if n := b.depth(t, queue); n != 0 {
+			t.Errorf("la cola %q tiene %d mensaje(s) pendiente(s): el reintento no debía llegarle", queue, n)
+		}
+	}
+
+	mustAck(t, retried, probeAWork)
+}
+
+// auditQueues asocia cada routing key de Audit con su única cola de trabajo.
+var auditQueues = map[string]string{
+	topology.AuditAlertRecordedRoutingKey:  "audit.alert-recorded.q",
+	topology.AuditAlertDeliveredRoutingKey: "audit.alert-delivered.q",
+	topology.AuditAlertDiscardedRoutingKey: "audit.alert-discarded.q",
+}
+
+// TestRouting_AuditAlertLlegaSoloASuCola publica cada routing key audit.alert.*
+// en el exchange principal y confirma que la recibe únicamente su cola: las
+// otras dos de Audit no deben recibir copia.
+func TestRouting_AuditAlertLlegaSoloASuCola(t *testing.T) {
+	b := connectAndDeclare(t)
+
+	deliveries := map[string]<-chan amqplib.Delivery{}
+	for _, queue := range auditQueues {
+		b.requireNoConsumers(t, queue)
+		deliveries[queue] = b.consume(t, queue)
+	}
+
+	for routingKey, want := range auditQueues {
+		t.Run(routingKey, func(t *testing.T) {
+			marker := newMarker(routingKey)
+			b.publish(t, b.cfg.MainExchange, routingKey, marker)
+
+			mustAck(t, mustReceive(t, deliveries[want], want, marker, deliveryTimeout), want)
+
+			for queue, ch := range deliveries {
+				if queue != want {
+					mustNotReceive(t, ch, queue)
+				}
+			}
 		})
 	}
 }

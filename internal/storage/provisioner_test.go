@@ -21,7 +21,10 @@ import (
 	"github.com/vinculo-vial/core-service/pkg/config"
 )
 
-const testBucket = "vinculo-vial-evidence-test"
+const (
+	testBucket      = "vinculo-vial-evidence-test"
+	testAuditBucket = "vinculo-vial-audit-test"
+)
 
 type call struct {
 	op    string
@@ -126,6 +129,7 @@ func testCfg() config.StorageConfig {
 	return config.StorageConfig{
 		Region:         "us-east-1",
 		Bucket:         testBucket,
+		AuditBucket:    testAuditBucket,
 		Timeout:        200 * time.Millisecond,
 		PendingDays:    2,
 		QuarantineDays: 15,
@@ -137,7 +141,11 @@ func testWait() WaitOptions {
 }
 
 func newTestProvisioner(api API, cfg config.StorageConfig) *Provisioner {
-	return NewProvisioner(api, cfg, testWait(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return newSpecProvisioner(api, EvidenceSpec(cfg), cfg)
+}
+
+func newSpecProvisioner(api API, spec BucketSpec, cfg config.StorageConfig) *Provisioner {
+	return NewProvisioner(api, spec, cfg, testWait(), slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
 func statusError(code int) error {
