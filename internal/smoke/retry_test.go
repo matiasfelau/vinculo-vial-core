@@ -468,3 +468,25 @@ func TestRouting_AuditAlertLlegaSoloASuCola(t *testing.T) {
 		})
 	}
 }
+
+// TestRouting_EmailRequestedLlegaSoloASuCola publica email.requested en el
+// exchange principal y confirma que lo recibe únicamente la cola de
+// Notification: ninguna otra cola de la plataforma debe recibir copia.
+func TestRouting_EmailRequestedLlegaSoloASuCola(t *testing.T) {
+	b := connectAndDeclare(t)
+
+	const emailQueue = "notification.email-requested.q"
+	b.requireNoConsumers(t, emailQueue)
+	b.requireNoConsumers(t, auditQueues[topology.AuditAlertRecordedRoutingKey])
+	deliveries := b.consume(t, emailQueue)
+	deliveriesAudit := b.consume(t, auditQueues[topology.AuditAlertRecordedRoutingKey])
+
+	marker := newMarker(topology.EmailRequestedRoutingKey)
+	b.publish(t, b.cfg.MainExchange, topology.EmailRequestedRoutingKey, marker)
+
+	mustAck(t, mustReceive(t, deliveries, emailQueue, marker, deliveryTimeout), emailQueue)
+	mustNotReceive(t, deliveriesAudit, auditQueues[topology.AuditAlertRecordedRoutingKey])
+	if n := b.depth(t, "vvi.unrouted.q"); n != 0 {
+		t.Errorf("vvi.unrouted.q tiene %d mensaje(s): email.requested no debía quedar sin ruta", n)
+	}
+}
