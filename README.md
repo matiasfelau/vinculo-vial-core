@@ -25,6 +25,33 @@ docker compose up --build
 buckets (ver las secciones siguientes): sin `S3_REGION`, `EVIDENCE_BUCKET`,
 `AUDIT_BUCKET` y credenciales AWS, el job termina con error.
 
+## Cobertura de pruebas
+
+El repo se mide con todas sus pruebas automatizadas en un único reporte:
+
+```
+go test -coverprofile=coverage.out -coverpkg=./... ./...
+go tool cover -func=coverage.out | tail -1     # total
+```
+
+La meta es 85 % o más sobre el total y no bajar de ahí. **No se excluye
+ningún código**: no hay código generado, y los dos `main` (`cmd/core`,
+`cmd/reset`) se reducen a armar el logger y las dependencias reales y llamar a
+`run`, que sí se prueba con un broker y un S3 simulados. Lo único que queda
+sin cubrir en la corrida por defecto es lo que necesita un servicio real:
+
+- las funciones `main` (llaman a `os.Exit`);
+- el adaptador `amqpBroker` de cada `main` (envuelve `*amqplib.Connection`
+  para poder inyectar un doble en `run`; solo se ejercita contra un RabbitMQ
+  real);
+- la rama defensiva de `run` ante un modelo de topología inconsistente:
+  `topology.Platform` y `Validate` usan la misma configuración y ninguna de
+  las probadas la dispara.
+
+Las pruebas con build tag (`smoke`, que requiere un broker real, y `aws`, que
+usa buckets reales de desarrollo) son opt-in y no entran en la corrida por
+defecto.
+
 ## Colas de la plataforma
 
 Cada flujo declara tres colas durables: `W` (trabajo, `<consumidor>.<evento>.q`),
