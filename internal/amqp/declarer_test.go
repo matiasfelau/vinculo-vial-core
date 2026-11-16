@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	amqplib "github.com/rabbitmq/amqp091-go"
@@ -126,5 +127,40 @@ func TestDeclarer_Apply_ErrorGenericoEnvuelveCausaOriginal(t *testing.T) {
 	var amqpErr *amqplib.Error
 	if errors.As(err, &amqpErr) {
 		t.Fatal("un error genérico no debería reportarse como 406")
+	}
+}
+
+func TestDeclarer_Apply_ErrorEnBindingSeEnvuelveYNoSigueConLosDemas(t *testing.T) {
+	original := errors.New("canal cerrado")
+	tp := sampleTopology()
+	tp.Bindings = append(tp.Bindings, topology.Binding{Queue: "alert.created.q", Exchange: "vvi.topic.exchange", RoutingKey: "otro"})
+	fake := &fakeChannel{bindErr: map[string]error{"alert.created.q": original}}
+
+	err := NewDeclarer(fake, silentLogger()).Apply(tp)
+	if !errors.Is(err, original) {
+		t.Fatalf("el error no envuelve la causa original: %v", err)
+	}
+	if !strings.Contains(err.Error(), "binding") {
+		t.Errorf("el error %q debería indicar que falló un binding", err.Error())
+	}
+	binds := 0
+	for _, c := range fake.calls {
+		if strings.HasPrefix(c, "bind:") {
+			binds++
+		}
+	}
+	if binds != 1 {
+		t.Errorf("se intentaron %d bindings, se esperaba detenerse en el primero", binds)
+	}
+}
+
+func TestDeclarer_Apply_406EnBindingSeReportaComoPrecondicionFallida(t *testing.T) {
+	fake := &fakeChannel{bindErr: map[string]error{
+		"alert.created.q": &amqplib.Error{Code: amqplib.PreconditionFailed, Reason: "PRECONDITION_FAILED", Server: true},
+	}}
+
+	err := NewDeclarer(fake, silentLogger()).Apply(sampleTopology())
+	if err == nil || !strings.Contains(err.Error(), "406 PRECONDITION_FAILED") {
+		t.Fatalf("error = %v, se esperaba mención explícita al 406", err)
 	}
 }
