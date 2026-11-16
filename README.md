@@ -51,14 +51,17 @@ la routing key del evento. Todas las colas de trabajo se ligan a
 | `audit.alert-recorded.q` | `audit.alert.recorded` | Alert → Audit | US-11 |
 | `audit.alert-delivered.q` | `audit.alert.delivered` | Alert → Audit | US-11 |
 | `audit.alert-discarded.q` | `audit.alert.discarded` | Alert → Audit | US-11 |
+| `notification.email-requested.q` | `email.requested` | Identity → Notification | US-13 |
 
 `vvi.unrouted.q` recibe, vía `alternate-exchange`, lo que no matchea ninguna
 cola. `alert.rejected` y `user.deleted` tienen dos consumidores cada uno, cada
 uno con su propia cola: un fallo en uno no reentrega al otro. Cada evento
 `audit.alert.*` tiene un único consumidor, Audit, y su routing key coincide
-con su `eventType`.
+con su `eventType`. `email.requested` también tiene un único consumidor,
+Notification, que lo usa para enviar el email de verificación, de recuperación
+de contraseña y de aviso de cambio.
 
-Las colas de US-09, US-10 y US-11 son aditivas: en un broker con estado no hay `406`, solo se
+Las colas de US-09, US-10, US-11 y US-13 son aditivas: en un broker con estado no hay `406`, solo se
 declaran las nuevas.
 
 ## Bucket de evidencia (AWS S3)

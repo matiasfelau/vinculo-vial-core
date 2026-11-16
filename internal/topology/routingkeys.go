@@ -69,4 +69,10 @@ const (
 	// vinculo-vial-alert cuando una alerta ya no puede llegar a nadie. Su
 	// único consumidor es vinculo-vial-audit.
 	AuditAlertDiscardedRoutingKey = "audit.alert.discarded"
+
+	// EmailRequestedRoutingKey es la routing key del evento publicado por
+	// vinculo-vial-identity, por outbox, cuando hay que enviar un email
+	// (verificación, recuperación de contraseña, aviso de cambio o aviso de
+	// cuenta existente). Su único consumidor es vinculo-vial-notification.
+	EmailRequestedRoutingKey = "email.requested"
 )

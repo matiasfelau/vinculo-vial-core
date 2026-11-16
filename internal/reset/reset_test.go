@@ -129,7 +129,7 @@ func TestResetter_Apply_CubreTodaLaTopologiaDeLaPlataforma(t *testing.T) {
 	}
 
 	// Las colas de los flujos de US-08, US-09, US-10 y US-11 (baja de cuenta y
-	// auditoría) forman parte del reset.
+	// auditoría) y de US-13 (email) forman parte del reset.
 	for _, work := range []string{
 		"ia.alert-evidence-uploaded",
 		"alert.ia-evidence-validated",
@@ -146,6 +146,7 @@ func TestResetter_Apply_CubreTodaLaTopologiaDeLaPlataforma(t *testing.T) {
 		"audit.alert-recorded",
 		"audit.alert-delivered",
 		"audit.alert-discarded",
+		"notification.email-requested",
 	} {
 		for _, suffix := range []string{".q", ".retry", ".dlq"} {
 			if !deleted["queue:"+work+suffix] {

@@ -36,6 +36,7 @@ func consumerFlows() []flowSpec {
 		{base: "audit.alert-recorded", eventRoutingKey: AuditAlertRecordedRoutingKey},
 		{base: "audit.alert-delivered", eventRoutingKey: AuditAlertDeliveredRoutingKey},
 		{base: "audit.alert-discarded", eventRoutingKey: AuditAlertDiscardedRoutingKey},
+		{base: "notification.email-requested", eventRoutingKey: EmailRequestedRoutingKey},
 	}
 }
 
