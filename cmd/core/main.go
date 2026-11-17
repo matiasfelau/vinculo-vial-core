@@ -35,10 +35,68 @@ const (
 	s3MaxBackoff     = 5 * time.Second
 )
 
+// s3API reúne lo que el job necesita del cliente S3: declarar (storage.API) y
+// verificar (verify.BucketAPI). *s3.Client lo cumple; las pruebas inyectan un
+// doble.
+type s3API interface {
+	storage.API
+	verify.BucketAPI
+}
+
+// channel es el canal AMQP con el que se declara y se verifica la topología.
+type channel interface {
+	vviamqp.Channel
+	verify.Channel
+	Close() error
+}
+
+// broker es la conexión AMQP del job. Se abstrae para probar run sin un
+// RabbitMQ real: *amqplib.Connection devuelve un *amqplib.Channel concreto,
+// que no puede sustituirse por un doble.
+type broker interface {
+	Channel() (channel, error)
+	Close() error
+}
+
+type amqpBroker struct{ conn *amqplib.Connection }
+
+func (b amqpBroker) Channel() (channel, error) { return b.conn.Channel() }
+func (b amqpBroker) Close() error              { return b.conn.Close() }
+
+// deps agrupa las dependencias externas de run: la conexión con el broker y
+// el cliente de S3.
+type deps struct {
+	connect func(ctx context.Context, cfg config.Config, logger *slog.Logger) (broker, error)
+	newS3   func(ctx context.Context, cfg config.StorageConfig) (s3API, error)
+}
+
+func defaultDeps() deps {
+	return deps{
+		connect: amqpConnector(brokerWaitTimeout, brokerRetryInterval),
+		newS3: func(ctx context.Context, cfg config.StorageConfig) (s3API, error) {
+			return storage.NewClient(ctx, cfg)
+		},
+	}
+}
+
+// amqpConnector devuelve la conexión real con RabbitMQ: reintenta durante
+// wait, cada retryInterval, hasta que el broker acepta conexiones.
+func amqpConnector(wait, retryInterval time.Duration) func(context.Context, config.Config, *slog.Logger) (broker, error) {
+	return func(ctx context.Context, cfg config.Config, logger *slog.Logger) (broker, error) {
+		conn, err := vviamqp.WaitAndDial(ctx, func() (*amqplib.Connection, error) {
+			return amqplib.Dial(cfg.RabbitMQURL)
+		}, wait, retryInterval, logger)
+		if err != nil {
+			return nil, err
+		}
+		return amqpBroker{conn: conn}, nil
+	}
+}
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
-	if err := run(logger); err != nil {
+	if err := run(context.Background(), logger, defaultDeps()); err != nil {
 		logger.Error("el job de inicialización de topología falló", "error", err)
 		os.Exit(1)
 	}
@@ -46,7 +104,7 @@ func main() {
 	logger.Info("topología y buckets de evidencia y de Audit declarados y verificados correctamente")
 }
 
-func run(logger *slog.Logger) error {
+func run(ctx context.Context, logger *slog.Logger, d deps) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -57,12 +115,10 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), brokerWaitTimeout+brokerRetryInterval)
+	brokerCtx, cancel := context.WithTimeout(ctx, brokerWaitTimeout+brokerRetryInterval)
 	defer cancel()
 
-	conn, err := vviamqp.WaitAndDial(ctx, func() (*amqplib.Connection, error) {
-		return amqplib.Dial(cfg.RabbitMQURL)
-	}, brokerWaitTimeout, brokerRetryInterval, logger)
+	conn, err := d.connect(brokerCtx, cfg, logger)
 	if err != nil {
 		return fmt.Errorf("conectando con rabbitmq: %w", err)
 	}
@@ -81,17 +137,17 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	return provisionBuckets(storageCfg, logger)
+	return provisionBuckets(ctx, storageCfg, d.newS3, logger)
 }
 
 // provisionBuckets declara en S3 el bucket de evidencia y el de Audit y
 // verifica que la configuración de cada uno coincida con lo declarado.
 // Cualquier fallo es fatal.
-func provisionBuckets(cfg config.StorageConfig, logger *slog.Logger) error {
-	ctx, cancel := context.WithTimeout(context.Background(), s3StageTimeout)
+func provisionBuckets(ctx context.Context, cfg config.StorageConfig, newS3 func(context.Context, config.StorageConfig) (s3API, error), logger *slog.Logger) error {
+	ctx, cancel := context.WithTimeout(ctx, s3StageTimeout)
 	defer cancel()
 
-	client, err := storage.NewClient(ctx, cfg)
+	client, err := newS3(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("creando el cliente de S3: %w", err)
 	}
@@ -109,7 +165,7 @@ func provisionBuckets(cfg config.StorageConfig, logger *slog.Logger) error {
 	return nil
 }
 
-func declareTopology(conn *amqplib.Connection, t topology.Topology, logger *slog.Logger) error {
+func declareTopology(conn broker, t topology.Topology, logger *slog.Logger) error {
 	ch, err := conn.Channel()
 	if err != nil {
 		return fmt.Errorf("abriendo canal de declaración: %w", err)
@@ -123,7 +179,7 @@ func declareTopology(conn *amqplib.Connection, t topology.Topology, logger *slog
 	return nil
 }
 
-func verifyTopology(conn *amqplib.Connection, t topology.Topology) error {
+func verifyTopology(conn broker, t topology.Topology) error {
 	ch, err := conn.Channel()
 	if err != nil {
 		return fmt.Errorf("abriendo canal de verificación: %w", err)
