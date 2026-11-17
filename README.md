@@ -8,7 +8,7 @@ objetos.
 
 ## Requisitos
 
-- Go 1.25+
+- Go 1.26+
 - Docker y Docker Compose
 
 ## Comandos
@@ -444,6 +444,61 @@ Cualquier servicio que necesite alcanzar RabbitMQ desde otro repositorio debe
 direccionarlo por su `container_name` (`vinculo-vial-rabbitmq`), no por el
 nombre de servicio de compose: ese alias es local a cada proyecto y puede
 colisionar con el de otro repositorio en la red compartida.
+
+## CI
+
+El workflow `.github/workflows/ci.yml` corre en todo `pull_request` hacia `dev` o `main` (y en
+`push` a `dev`). Tiene dos jobs:
+
+| Job | Qué hace | ¿Corta? |
+|---|---|---|
+| `build-and-test` | compila, `go vet` (también con el tag `smoke`), pruebas unitarias y smoke contra un RabbitMQ real, con cobertura, y `diff-cover` | Sí |
+| `security` | `govulncheck`, Trivy `fs` y Semgrep | `govulncheck` y Trivy sí; Semgrep no (informativo, pasa a gate en v0.14) |
+
+Las acciones de terceros están fijadas por SHA de commit (la versión va en un comentario) en `ci.yml`
+y en `publish.yml`, y los dos workflows declaran `permissions: contents: read`. Dependabot actualiza
+semanalmente `gomod`, `github-actions` y `docker`.
+
+### Cobertura
+
+- **Un único reporte** con las pruebas unitarias y el smoke de enrutamiento (`-tags smoke`, contra el
+  RabbitMQ que el job levanta como servicio), unidos con `gocovmerge` y convertidos a Cobertura XML.
+  Las pruebas con el tag `aws` no corren en el CI: son opt-in y pegan contra buckets reales.
+- **Gate sobre el código nuevo:** `diff-cover` exige 85 % o más de las líneas que el PR agrega o
+  cambia respecto de la rama base.
+- **Cobertura total:** se publica en el resumen del job y como artefacto `cobertura`, sin cortar. El
+  gate sobre el total entra con el PR de cobertura.
+- **Exclusiones:** ninguna. No hay código generado y el escrito a mano cuenta entero.
+
+### Seguridad
+
+`govulncheck` falla ante vulnerabilidades alcanzables y Trivy ante HIGH o CRITICAL con corrección
+disponible (también busca secretos y errores de configuración). Las excepciones de Trivy viven solo en
+`.trivyignore`, cada una con su motivo y su fecha de revisión; hoy no hay ninguna.
+
+### Correr en local
+
+```bash
+# Cobertura (perfiles unitario y smoke, unidos y convertidos a Cobertura XML)
+go test ./... -count=1 -covermode=atomic -coverpkg=./... -coverprofile=coverage-unit.out
+RABBITMQ_URL=amqp://guest:guest@localhost:5672/ go test -tags smoke ./internal/smoke/... -count=1 \
+  -covermode=atomic -coverpkg=./... -coverprofile=coverage-smoke.out
+go install github.com/wadey/gocovmerge@b5bfa59ec0ad
+go install github.com/boumenot/gocover-cobertura@v1.5.0
+gocovmerge coverage-unit.out coverage-smoke.out > coverage.out
+GOFLAGS=-tags=smoke gocover-cobertura < coverage.out > coverage.xml
+go tool cover -func=coverage.out | tail -n 1
+
+# Gate sobre el código nuevo (con los cambios commiteados y origin/dev actualizado)
+pip install diff-cover==11.0.2
+diff-cover coverage.xml --compare-branch=origin/dev --fail-under=85
+
+# Seguridad
+go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+govulncheck ./...
+docker run --rm -v "$PWD:/src" aquasec/trivy:latest fs --scanners vuln,secret,misconfig \
+  --severity HIGH,CRITICAL --ignore-unfixed --ignorefile /src/.trivyignore /src
+```
 
 ## Release
 
