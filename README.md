@@ -25,33 +25,6 @@ docker compose up --build
 buckets (ver las secciones siguientes): sin `S3_REGION`, `EVIDENCE_BUCKET`,
 `AUDIT_BUCKET` y credenciales AWS, el job termina con error.
 
-## Cobertura de pruebas
-
-El repo se mide con todas sus pruebas automatizadas en un único reporte:
-
-```
-go test -coverprofile=coverage.out -coverpkg=./... ./...
-go tool cover -func=coverage.out | tail -1     # total
-```
-
-La meta es 85 % o más sobre el total y no bajar de ahí. **No se excluye
-ningún código**: no hay código generado, y los dos `main` (`cmd/core`,
-`cmd/reset`) se reducen a armar el logger y las dependencias reales y llamar a
-`run`, que sí se prueba con un broker y un S3 simulados. Lo único que queda
-sin cubrir en la corrida por defecto es lo que necesita un servicio real:
-
-- las funciones `main` (llaman a `os.Exit`);
-- el adaptador `amqpBroker` de cada `main` (envuelve `*amqplib.Connection`
-  para poder inyectar un doble en `run`; solo se ejercita contra un RabbitMQ
-  real);
-- la rama defensiva de `run` ante un modelo de topología inconsistente:
-  `topology.Platform` y `Validate` usan la misma configuración y ninguna de
-  las probadas la dispara.
-
-Las pruebas con build tag (`smoke`, que requiere un broker real, y `aws`, que
-usa buckets reales de desarrollo) son opt-in y no entran en la corrida por
-defecto.
-
 ## Colas de la plataforma
 
 Cada flujo declara tres colas durables: `W` (trabajo, `<consumidor>.<evento>.q`),
@@ -493,9 +466,17 @@ semanalmente `gomod`, `github-actions` y `docker`.
   Las pruebas con el tag `aws` no corren en el CI: son opt-in y pegan contra buckets reales.
 - **Gate sobre el código nuevo:** `diff-cover` exige 85 % o más de las líneas que el PR agrega o
   cambia respecto de la rama base.
-- **Cobertura total:** se publica en el resumen del job y como artefacto `cobertura`, sin cortar. El
-  gate sobre el total entra con el PR de cobertura.
-- **Exclusiones:** ninguna. No hay código generado y el escrito a mano cuenta entero.
+- **Gate sobre el total:** el job falla si la cobertura de sentencias baja de 85 %. Hoy mide 97,8 %.
+  Se publica además en el resumen del job y como artefacto `cobertura`. Ninguna rama puede bajar el
+  total de ese mínimo.
+- **Exclusiones:** ninguna. No hay código generado y el escrito a mano cuenta entero. Los dos `main`
+  (`cmd/core`, `cmd/reset`) se reducen a armar el logger y las dependencias reales y llamar a `run`,
+  que se prueba con un broker y un S3 simulados. El adaptador `amqpBroker` de cada `main` envuelve
+  `*amqplib.Connection` para poder inyectar un doble en `run`, así que solo se ejercita contra un
+  RabbitMQ real: lo cubre un test con el tag `smoke` en cada `cmd/`. Lo único que queda sin cubrir
+  son las llamadas de las funciones `main` (terminan en `os.Exit`) y la rama defensiva de `run` ante
+  un modelo de topología inconsistente, que `topology.Platform` y `Validate` nunca disparan porque
+  usan la misma configuración.
 
 ### Seguridad
 
@@ -508,7 +489,7 @@ disponible (también busca secretos y errores de configuración). Las excepcione
 ```bash
 # Cobertura (perfiles unitario y smoke, unidos y convertidos a Cobertura XML)
 go test ./... -count=1 -covermode=atomic -coverpkg=./... -coverprofile=coverage-unit.out
-RABBITMQ_URL=amqp://guest:guest@localhost:5672/ go test -tags smoke ./internal/smoke/... -count=1 \
+RABBITMQ_URL=amqp://guest:guest@localhost:5672/ go test -tags smoke ./... -count=1 \
   -covermode=atomic -coverpkg=./... -coverprofile=coverage-smoke.out
 go install github.com/wadey/gocovmerge@b5bfa59ec0ad
 go install github.com/boumenot/gocover-cobertura@v1.5.0

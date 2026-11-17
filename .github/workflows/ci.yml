@@ -60,10 +60,10 @@ jobs:
       - name: Pruebas unitarias con cobertura
         run: go test ./... -count=1 -covermode=atomic -coverpkg=./... -coverprofile=coverage-unit.out
 
-      - name: Smoke test de enrutamiento con cobertura (RabbitMQ real)
+      - name: Pruebas con el tag smoke y cobertura (RabbitMQ real)
         env:
           RABBITMQ_URL: amqp://guest:guest@localhost:5672/
-        run: go test -tags smoke ./internal/smoke/... -count=1 -covermode=atomic -coverpkg=./... -coverprofile=coverage-smoke.out
+        run: go test -tags smoke ./... -count=1 -covermode=atomic -coverpkg=./... -coverprofile=coverage-smoke.out
 
       - name: Unir perfiles y convertir a Cobertura XML
         run: |
@@ -74,16 +74,17 @@ jobs:
           # con "smoke".
           GOFLAGS=-tags=smoke gocover-cobertura < coverage.out > coverage.xml
 
-      # Se publica en el resumen del job. El gate sobre el total entra con el PR de cobertura.
-      - name: Publicar la cobertura total
+      # Segundo gate, sobre el total del repo: ninguna rama puede bajarlo de 85 %.
+      - name: Publicar la cobertura total y exigir el mínimo
         run: |
           total="$(go tool cover -func=coverage.out | awk '/^total:/ {print $NF}')"
           {
             echo "## Cobertura total"
             echo
-            echo "**${total}** de las sentencias (pruebas unitarias y smoke unidas)."
+            echo "**${total}** de las sentencias (pruebas unitarias y smoke unidas). Mínimo: ${COVERAGE_THRESHOLD} %."
           } >> "$GITHUB_STEP_SUMMARY"
           go tool cover -func=coverage.out > coverage-func.txt
+          awk -v t="${total%\%}" -v min="${COVERAGE_THRESHOLD}" 'BEGIN { exit (t >= min) ? 0 : 1 }'
 
       - name: Subir reportes de cobertura
         if: always()
