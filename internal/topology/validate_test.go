@@ -59,20 +59,27 @@ func TestValidate_TopologiaCoherente(t *testing.T) {
 
 func TestValidate_ColaDeTrabajoSinRetry(t *testing.T) {
 	tp := baseValidTopology()
-	tp.Queues = []Queue{tp.Queues[0], tp.Queues[2]} // sin .retry
+	// Se quitan también los bindings de la cola: si quedaran, Validate
+	// fallaría antes por el binding huérfano y no por la regla que se prueba.
+	tp.Queues = []Queue{tp.Queues[0], tp.Queues[2]}
+	tp.Bindings = []Binding{tp.Bindings[0], tp.Bindings[2]}
 
-	if err := tp.Validate(testConfig()); err == nil {
-		t.Fatal("se esperaba error: cola de trabajo sin .retry declarada")
-	}
+	assertValidateError(t, tp, `no tiene declarada su .retry ("alert.created.retry")`)
 }
 
 func TestValidate_ColaDeTrabajoSinDLQ(t *testing.T) {
 	tp := baseValidTopology()
-	tp.Queues = []Queue{tp.Queues[0], tp.Queues[1]} // sin .dlq
+	tp.Queues = []Queue{tp.Queues[0], tp.Queues[1]}
+	tp.Bindings = []Binding{tp.Bindings[0], tp.Bindings[1]}
 
-	if err := tp.Validate(testConfig()); err == nil {
-		t.Fatal("se esperaba error: cola de trabajo sin .dlq declarada")
-	}
+	assertValidateError(t, tp, `no tiene declarada su .dlq ("alert.created.dlq")`)
+}
+
+func TestValidate_BindingHuerfanoDeRetryODLQFallaPorElBinding(t *testing.T) {
+	tp := baseValidTopology()
+	tp.Queues = []Queue{tp.Queues[0], tp.Queues[2]} // sin .retry pero su binding sigue declarado
+
+	assertValidateError(t, tp, `referencia la cola no declarada "alert.created.retry"`)
 }
 
 func TestValidate_BindingAExchangeNoDeclarado(t *testing.T) {

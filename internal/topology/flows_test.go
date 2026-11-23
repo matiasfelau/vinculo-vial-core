@@ -30,9 +30,11 @@ func contractFlows() map[string]string {
 		"notification.alert-pending-delivered.q": "alert.pending.delivered",
 		"alert.user-deleted.q":                   "user.deleted",
 		"vehicle.user-deleted.q":                 "user.deleted",
+		"benefits.user-deleted.q":                "user.deleted",
 		"audit.alert-recorded.q":                 "audit.alert.recorded",
 		"audit.alert-delivered.q":                "audit.alert.delivered",
 		"audit.alert-discarded.q":                "audit.alert.discarded",
+		"notification.email-requested.q":         "email.requested",
 	}
 }
 
@@ -96,11 +98,11 @@ func TestTopicMatches(t *testing.T) {
 	}
 }
 
-func TestPlatform_DeclaraExactamenteLosDiecisieteFlujosDelContrato(t *testing.T) {
+func TestPlatform_DeclaraExactamenteLosDiecinueveFlujosDelContrato(t *testing.T) {
 	tp := Platform(testConfig())
 
-	if got := len(contractFlows()); got != 17 {
-		t.Fatalf("el contrato enumera %d flujos, se esperaban 17", got)
+	if got := len(contractFlows()); got != 19 {
+		t.Fatalf("el contrato enumera %d flujos, se esperaban 19", got)
 	}
 
 	want := []string{unroutedQueueName}
@@ -124,8 +126,8 @@ func TestPlatform_DeclaraExactamenteLosDiecisieteFlujosDelContrato(t *testing.T)
 	}
 }
 
-// TestPlatform_ArgumentosDeCadaFlujoDelContrato verifica, para los 17 flujos
-// (incluidos los tres de Audit), los argumentos inmutables de la cola de
+// TestPlatform_ArgumentosDeCadaFlujoDelContrato verifica, para los 19 flujos
+// (incluidos los tres de Audit, el de email y el de Benefits), los argumentos inmutables de la cola de
 // trabajo, de su .retry y de su .dlq. Cambiarlos exige borrar y recrear la
 // cola, así que cualquier desvío debe romper acá y no con un 406 en el broker.
 func TestPlatform_ArgumentosDeCadaFlujoDelContrato(t *testing.T) {
@@ -137,9 +139,12 @@ func TestPlatform_ArgumentosDeCadaFlujoDelContrato(t *testing.T) {
 		queues[q.Name] = q
 	}
 
-	for _, auditWork := range []string{"audit.alert-recorded.q", "audit.alert-delivered.q", "audit.alert-discarded.q"} {
-		if _, ok := contractFlows()[auditWork]; !ok {
-			t.Fatalf("el flujo %q de Audit no está en el contrato del test", auditWork)
+	for _, newWork := range []string{
+		"audit.alert-recorded.q", "audit.alert-delivered.q", "audit.alert-discarded.q",
+		"notification.email-requested.q", "benefits.user-deleted.q",
+	} {
+		if _, ok := contractFlows()[newWork]; !ok {
+			t.Fatalf("el flujo %q no está en el contrato del test", newWork)
 		}
 	}
 
@@ -291,8 +296,9 @@ func TestPlatform_CadaEventoDelContratoLlegaSoloASusConsumidores(t *testing.T) {
 
 	// alert.rejected tiene dos consumidores contratados: Identity (penaliza) y
 	// Notification (avisa al emisor), cada uno con su propia cola de trabajo.
-	// user.deleted también tiene dos: Alert y Vehicle. Cada evento audit.alert.*
-	// tiene un único consumidor: Audit.
+	// user.deleted tiene tres: Alert, Vehicle y Benefits. Cada evento audit.alert.*
+	// tiene un único consumidor: Audit. email.requested también tiene uno solo:
+	// Notification.
 	concreteKeys := map[string][]string{
 		"alert.created":                {"notification.alert-created.q"},
 		"user.sessions.revoked":        {"notification.sessions-revoked.q"},
@@ -307,10 +313,11 @@ func TestPlatform_CadaEventoDelContratoLlegaSoloASusConsumidores(t *testing.T) {
 		"alert.seen":                   {"notification.alert-seen.q"},
 		"vehicle.pending.claimed":      {"alert.vehicle-pending-claimed.q"},
 		"alert.pending.delivered":      {"notification.alert-pending-delivered.q"},
-		"user.deleted":                 {"alert.user-deleted.q", "vehicle.user-deleted.q"},
+		"user.deleted":                 {"alert.user-deleted.q", "benefits.user-deleted.q", "vehicle.user-deleted.q"},
 		"audit.alert.recorded":         {"audit.alert-recorded.q"},
 		"audit.alert.delivered":        {"audit.alert-delivered.q"},
 		"audit.alert.discarded":        {"audit.alert-discarded.q"},
+		"email.requested":              {"notification.email-requested.q"},
 	}
 
 	for key, want := range concreteKeys {

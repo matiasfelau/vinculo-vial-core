@@ -6,3 +6,12 @@
 
 CLAUDE.md
 .clauderules
+
+# Archivos de instrucciones (no se commitean)
+CONTRATO-*.md
+clauderules
+
+# Reportes de cobertura del CI (ver el README)
+coverage.xml
+coverage-func.txt
+diff-cover.md

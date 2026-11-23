@@ -8,7 +8,7 @@ objetos.
 
 ## Requisitos
 
-- Go 1.25+
+- Go 1.26+
 - Docker y Docker Compose
 
 ## Comandos
@@ -48,17 +48,23 @@ la routing key del evento. Todas las colas de trabajo se ligan a
 | `notification.alert-pending-delivered.q` | `alert.pending.delivered` | Alert → Notification | US-10 |
 | `alert.user-deleted.q` | `user.deleted` | Identity → Alert | US-11 |
 | `vehicle.user-deleted.q` | `user.deleted` | Identity → Vehicle | US-11 |
+| `benefits.user-deleted.q` | `user.deleted` | Identity → Benefits | US-18 |
 | `audit.alert-recorded.q` | `audit.alert.recorded` | Alert → Audit | US-11 |
 | `audit.alert-delivered.q` | `audit.alert.delivered` | Alert → Audit | US-11 |
 | `audit.alert-discarded.q` | `audit.alert.discarded` | Alert → Audit | US-11 |
+| `notification.email-requested.q` | `email.requested` | Identity → Notification | US-13 |
 
 `vvi.unrouted.q` recibe, vía `alternate-exchange`, lo que no matchea ninguna
-cola. `alert.rejected` y `user.deleted` tienen dos consumidores cada uno, cada
-uno con su propia cola: un fallo en uno no reentrega al otro. Cada evento
+cola. `alert.rejected` tiene dos consumidores y `user.deleted` tiene tres
+(Alert, Vehicle y Benefits), cada uno con su propia cola: un fallo en uno no
+reentrega a los otros. Benefits usa `user.deleted` para pasar a `BURNED` los
+códigos de descuento del usuario dado de baja. Cada evento
 `audit.alert.*` tiene un único consumidor, Audit, y su routing key coincide
-con su `eventType`.
+con su `eventType`. `email.requested` también tiene un único consumidor,
+Notification, que lo usa para enviar el email de verificación, de recuperación
+de contraseña y de aviso de cambio.
 
-Las colas de US-09, US-10 y US-11 son aditivas: en un broker con estado no hay `406`, solo se
+Las colas de US-09, US-10, US-11, US-13 y US-18 son aditivas: en un broker con estado no hay `406`, solo se
 declaran las nuevas.
 
 ## Bucket de evidencia (AWS S3)
@@ -350,7 +356,7 @@ No forma parte del arranque del sistema ni del `docker-compose.yml`: es una
 herramienta manual, pensada para forzar una redeclaración de topología
 durante el desarrollo sin reiniciar el contenedor del broker. Borra todas las
 colas y exchanges de la plataforma, incluidos los flujos de
-US-08, US-09, US-10 y US-11 (baja de cuenta y Audit). Solo toca el broker: no se
+US-08, US-09, US-10, US-11 y US-18 (baja de cuenta, Audit y Benefits). Solo toca el broker: no se
 conecta a S3 ni modifica los buckets de evidencia y de Audit, que persisten
 entre corridas.
 
@@ -384,8 +390,9 @@ disponible en la validación habitual. Cubre:
   segunda copia.
 - **DLQ por nombre de cola:** un mensaje publicado en `vvi.dlq.exchange` con
   la routing key `W` queda solo en `W.dlq`.
-- **`user.deleted` (US-11):** el mensaje llega a `alert.user-deleted.q` y a
-  `vehicle.user-deleted.q`. Con esas dos y dos colas de prueba bindeadas al
+- **`user.deleted` (US-11, US-18):** el mensaje llega a `alert.user-deleted.q`,
+  a `vehicle.user-deleted.q` y a `benefits.user-deleted.q`. Con esas tres y
+  dos colas de prueba bindeadas al
   mismo evento, un `nack` sin requeue en una de las de prueba vuelve solo a
   esa cola.
 - **`audit.alert.*` (US-11):** `audit.alert.recorded`, `.delivered` y
@@ -407,8 +414,9 @@ de publicar verifica que las colas de trabajo reales que usa no tengan
 consumidores activos y falla si los hay: deben estar detenidos los consumidores
 de `notification.alert-created.q`, `notification.sessions-revoked.q`,
 `identity.alert-rejected.q`, `alert.ia-evidence-validated.q`,
-`alert.user-deleted.q`, `vehicle.user-deleted.q`, `audit.alert-recorded.q`,
-`audit.alert-delivered.q` y `audit.alert-discarded.q` (por ejemplo,
+`alert.user-deleted.q`, `vehicle.user-deleted.q`, `benefits.user-deleted.q`,
+`audit.alert-recorded.q`, `audit.alert-delivered.q` y `audit.alert-discarded.q`
+(por ejemplo,
 `docker stop vinculo-vial-notification`), porque competirían por el mismo
 mensaje.
 
@@ -436,6 +444,69 @@ Cualquier servicio que necesite alcanzar RabbitMQ desde otro repositorio debe
 direccionarlo por su `container_name` (`vinculo-vial-rabbitmq`), no por el
 nombre de servicio de compose: ese alias es local a cada proyecto y puede
 colisionar con el de otro repositorio en la red compartida.
+
+## CI
+
+El workflow `.github/workflows/ci.yml` corre en todo `pull_request` hacia `dev` o `main` (y en
+`push` a `dev`). Tiene dos jobs:
+
+| Job | Qué hace | ¿Corta? |
+|---|---|---|
+| `build-and-test` | compila, `go vet` (también con el tag `smoke`), pruebas unitarias y smoke contra un RabbitMQ real, con cobertura, y `diff-cover` | Sí |
+| `security` | `govulncheck`, Trivy `fs` y Semgrep | `govulncheck` y Trivy sí; Semgrep no (informativo, pasa a gate en v0.14) |
+
+Las acciones de terceros están fijadas por SHA de commit (la versión va en un comentario) en `ci.yml`
+y en `publish.yml`, y los dos workflows declaran `permissions: contents: read`. Dependabot actualiza
+semanalmente `gomod`, `github-actions` y `docker`.
+
+### Cobertura
+
+- **Un único reporte** con las pruebas unitarias y el smoke de enrutamiento (`-tags smoke`, contra el
+  RabbitMQ que el job levanta como servicio), unidos con `gocovmerge` y convertidos a Cobertura XML.
+  Las pruebas con el tag `aws` no corren en el CI: son opt-in y pegan contra buckets reales.
+- **Gate sobre el código nuevo:** `diff-cover` exige 85 % o más de las líneas que el PR agrega o
+  cambia respecto de la rama base.
+- **Gate sobre el total:** el job falla si la cobertura de sentencias baja de 85 %. Hoy mide 97,8 %.
+  Se publica además en el resumen del job y como artefacto `cobertura`. Ninguna rama puede bajar el
+  total de ese mínimo.
+- **Exclusiones:** ninguna. No hay código generado y el escrito a mano cuenta entero. Los dos `main`
+  (`cmd/core`, `cmd/reset`) se reducen a armar el logger y las dependencias reales y llamar a `run`,
+  que se prueba con un broker y un S3 simulados. El adaptador `amqpBroker` de cada `main` envuelve
+  `*amqplib.Connection` para poder inyectar un doble en `run`, así que solo se ejercita contra un
+  RabbitMQ real: lo cubre un test con el tag `smoke` en cada `cmd/`. Lo único que queda sin cubrir
+  son las llamadas de las funciones `main` (terminan en `os.Exit`) y la rama defensiva de `run` ante
+  un modelo de topología inconsistente, que `topology.Platform` y `Validate` nunca disparan porque
+  usan la misma configuración.
+
+### Seguridad
+
+`govulncheck` falla ante vulnerabilidades alcanzables y Trivy ante HIGH o CRITICAL con corrección
+disponible (también busca secretos y errores de configuración). Las excepciones de Trivy viven solo en
+`.trivyignore`, cada una con su motivo y su fecha de revisión; hoy no hay ninguna.
+
+### Correr en local
+
+```bash
+# Cobertura (perfiles unitario y smoke, unidos y convertidos a Cobertura XML)
+go test ./... -count=1 -covermode=atomic -coverpkg=./... -coverprofile=coverage-unit.out
+RABBITMQ_URL=amqp://guest:guest@localhost:5672/ go test -tags smoke ./... -count=1 \
+  -covermode=atomic -coverpkg=./... -coverprofile=coverage-smoke.out
+go install github.com/wadey/gocovmerge@b5bfa59ec0ad
+go install github.com/boumenot/gocover-cobertura@v1.5.0
+gocovmerge coverage-unit.out coverage-smoke.out > coverage.out
+GOFLAGS=-tags=smoke gocover-cobertura < coverage.out > coverage.xml
+go tool cover -func=coverage.out | tail -n 1
+
+# Gate sobre el código nuevo (con los cambios commiteados y origin/dev actualizado)
+pip install diff-cover==11.0.2
+diff-cover coverage.xml --compare-branch=origin/dev --fail-under=85
+
+# Seguridad
+go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+govulncheck ./...
+docker run --rm -v "$PWD:/src" aquasec/trivy:latest fs --scanners vuln,secret,misconfig \
+  --severity HIGH,CRITICAL --ignore-unfixed --ignorefile /src/.trivyignore /src
+```
 
 ## Release
 

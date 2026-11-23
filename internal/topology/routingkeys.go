@@ -51,8 +51,8 @@ const (
 	AlertPendingDeliveredRoutingKey = "alert.pending.delivered"
 
 	// UserDeletedRoutingKey es la routing key del evento publicado por
-	// vinculo-vial-identity al dar de baja la cuenta de un usuario. Tiene dos
-	// consumidores (Alert y Vehicle), cada uno con su propia cola de trabajo.
+	// vinculo-vial-identity al dar de baja la cuenta de un usuario. Tiene tres
+	// consumidores (Alert, Vehicle y Benefits), cada uno con su propia cola de trabajo.
 	UserDeletedRoutingKey = "user.deleted"
 
 	// AuditAlertRecordedRoutingKey es la routing key del evento publicado por
@@ -69,4 +69,10 @@ const (
 	// vinculo-vial-alert cuando una alerta ya no puede llegar a nadie. Su
 	// único consumidor es vinculo-vial-audit.
 	AuditAlertDiscardedRoutingKey = "audit.alert.discarded"
+
+	// EmailRequestedRoutingKey es la routing key del evento publicado por
+	// vinculo-vial-identity, por outbox, cuando hay que enviar un email
+	// (verificación, recuperación de contraseña, aviso de cambio o aviso de
+	// cuenta existente). Su único consumidor es vinculo-vial-notification.
+	EmailRequestedRoutingKey = "email.requested"
 )

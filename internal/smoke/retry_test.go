@@ -355,17 +355,18 @@ func TestRouting_ColaDeIARecibeGreenYellowYRed(t *testing.T) {
 }
 
 const (
-	alertUserDeletedQueue   = "alert.user-deleted.q"
-	vehicleUserDeletedQueue = "vehicle.user-deleted.q"
+	alertUserDeletedQueue    = "alert.user-deleted.q"
+	vehicleUserDeletedQueue  = "vehicle.user-deleted.q"
+	benefitsUserDeletedQueue = "benefits.user-deleted.q"
 )
 
 // TestRouting_UserDeletedLlegaALasDosColas publica user.deleted en el
 // exchange principal y confirma que lo reciben las colas de trabajo de Alert
-// y de Vehicle, cada una con su propia copia.
-func TestRouting_UserDeletedLlegaALasDosColas(t *testing.T) {
+// de Alert, de Vehicle y de Benefits, cada una con su propia copia.
+func TestRouting_UserDeletedLlegaALasTresColas(t *testing.T) {
 	b := connectAndDeclare(t)
 
-	queues := []string{alertUserDeletedQueue, vehicleUserDeletedQueue}
+	queues := []string{alertUserDeletedQueue, vehicleUserDeletedQueue, benefitsUserDeletedQueue}
 	deliveries := map[string]<-chan amqplib.Delivery{}
 	for _, queue := range queues {
 		b.requireNoConsumers(t, queue)
@@ -381,7 +382,7 @@ func TestRouting_UserDeletedLlegaALasDosColas(t *testing.T) {
 }
 
 // TestRetry_UserDeletedReentregaSoloALaColaQueFallo publica user.deleted con
-// cuatro colas bindeadas (las reales de Alert y Vehicle y dos de prueba). Un
+// cinco colas bindeadas (las reales de Alert, Vehicle y Benefits y dos de prueba). Un
 // nack sin requeue en una de las de prueba debe volver únicamente a esa cola,
 // pasando por su .retry: las demás, que ya hicieron ack, no reciben una
 // segunda copia.
@@ -390,6 +391,7 @@ func TestRetry_UserDeletedReentregaSoloALaColaQueFallo(t *testing.T) {
 
 	b.requireNoConsumers(t, alertUserDeletedQueue)
 	b.requireNoConsumers(t, vehicleUserDeletedQueue)
+	b.requireNoConsumers(t, benefitsUserDeletedQueue)
 	b.declareProbes(t, topology.UserDeletedRoutingKey, userDeletedProbeA, userDeletedProbeB)
 
 	probeAWork, probeBWork := userDeletedProbeA+".q", userDeletedProbeB+".q"
@@ -397,6 +399,7 @@ func TestRetry_UserDeletedReentregaSoloALaColaQueFallo(t *testing.T) {
 	deliveriesB := b.consume(t, probeBWork)
 	deliveriesAlert := b.consume(t, alertUserDeletedQueue)
 	deliveriesVehicle := b.consume(t, vehicleUserDeletedQueue)
+	deliveriesBenefits := b.consume(t, benefitsUserDeletedQueue)
 
 	marker := newMarker("user-deleted-retry")
 	b.publish(t, b.cfg.MainExchange, topology.UserDeletedRoutingKey, marker)
@@ -405,10 +408,12 @@ func TestRetry_UserDeletedReentregaSoloALaColaQueFallo(t *testing.T) {
 	msgB := mustReceive(t, deliveriesB, probeBWork, marker, deliveryTimeout)
 	msgAlert := mustReceive(t, deliveriesAlert, alertUserDeletedQueue, marker, deliveryTimeout)
 	msgVehicle := mustReceive(t, deliveriesVehicle, vehicleUserDeletedQueue, marker, deliveryTimeout)
+	msgBenefits := mustReceive(t, deliveriesBenefits, benefitsUserDeletedQueue, marker, deliveryTimeout)
 
 	mustAck(t, msgB, probeBWork)
 	mustAck(t, msgAlert, alertUserDeletedQueue)
 	mustAck(t, msgVehicle, vehicleUserDeletedQueue)
+	mustAck(t, msgBenefits, benefitsUserDeletedQueue)
 	if err := msgA.Nack(false, false); err != nil {
 		t.Fatalf("nack del mensaje de %q: %v", probeAWork, err)
 	}
@@ -425,7 +430,8 @@ func TestRetry_UserDeletedReentregaSoloALaColaQueFallo(t *testing.T) {
 	mustNotReceive(t, deliveriesB, probeBWork)
 	mustNotReceive(t, deliveriesAlert, alertUserDeletedQueue)
 	mustNotReceive(t, deliveriesVehicle, vehicleUserDeletedQueue)
-	for _, queue := range []string{probeBWork, alertUserDeletedQueue, vehicleUserDeletedQueue} {
+	mustNotReceive(t, deliveriesBenefits, benefitsUserDeletedQueue)
+	for _, queue := range []string{probeBWork, alertUserDeletedQueue, vehicleUserDeletedQueue, benefitsUserDeletedQueue} {
 		if n := b.depth(t, queue); n != 0 {
 			t.Errorf("la cola %q tiene %d mensaje(s) pendiente(s): el reintento no debía llegarle", queue, n)
 		}
@@ -466,5 +472,27 @@ func TestRouting_AuditAlertLlegaSoloASuCola(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestRouting_EmailRequestedLlegaSoloASuCola publica email.requested en el
+// exchange principal y confirma que lo recibe únicamente la cola de
+// Notification: ninguna otra cola de la plataforma debe recibir copia.
+func TestRouting_EmailRequestedLlegaSoloASuCola(t *testing.T) {
+	b := connectAndDeclare(t)
+
+	const emailQueue = "notification.email-requested.q"
+	b.requireNoConsumers(t, emailQueue)
+	b.requireNoConsumers(t, auditQueues[topology.AuditAlertRecordedRoutingKey])
+	deliveries := b.consume(t, emailQueue)
+	deliveriesAudit := b.consume(t, auditQueues[topology.AuditAlertRecordedRoutingKey])
+
+	marker := newMarker(topology.EmailRequestedRoutingKey)
+	b.publish(t, b.cfg.MainExchange, topology.EmailRequestedRoutingKey, marker)
+
+	mustAck(t, mustReceive(t, deliveries, emailQueue, marker, deliveryTimeout), emailQueue)
+	mustNotReceive(t, deliveriesAudit, auditQueues[topology.AuditAlertRecordedRoutingKey])
+	if n := b.depth(t, "vvi.unrouted.q"); n != 0 {
+		t.Errorf("vvi.unrouted.q tiene %d mensaje(s): email.requested no debía quedar sin ruta", n)
 	}
 }

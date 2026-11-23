@@ -33,9 +33,11 @@ func consumerFlows() []flowSpec {
 		{base: "notification.alert-pending-delivered", eventRoutingKey: AlertPendingDeliveredRoutingKey},
 		{base: "alert.user-deleted", eventRoutingKey: UserDeletedRoutingKey},
 		{base: "vehicle.user-deleted", eventRoutingKey: UserDeletedRoutingKey},
+		{base: "benefits.user-deleted", eventRoutingKey: UserDeletedRoutingKey},
 		{base: "audit.alert-recorded", eventRoutingKey: AuditAlertRecordedRoutingKey},
 		{base: "audit.alert-delivered", eventRoutingKey: AuditAlertDeliveredRoutingKey},
 		{base: "audit.alert-discarded", eventRoutingKey: AuditAlertDiscardedRoutingKey},
+		{base: "notification.email-requested", eventRoutingKey: EmailRequestedRoutingKey},
 	}
 }
 
